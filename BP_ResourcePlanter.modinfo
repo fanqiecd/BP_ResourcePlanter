@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Mod id="9c7f4a2e-3d18-4b6c-9e1a-2f5a8d1b7c3e" version="1">
+  <Properties>
+    <Name>LOC_BP_RESOURCE_PLANTER_MOD_NAME</Name>
+    <Description>LOC_BP_RESOURCE_PLANTER_MOD_DESCRIPTION</Description>
+    <Created></Created>
+    <Teaser>LOC_BP_RESOURCE_PLANTER_MOD_DESCRIPTION</Teaser>
+    <Authors>Noot</Authors>
+    <CompatibleVersions>2.0</CompatibleVersions>
+  </Properties>
+
+  <InGameActions>
+    <UpdateDatabase id="BP_Resource_Data">
+      <Properties>
+        <LoadOrder>10100</LoadOrder>
+      </Properties>
+      <File>BP_ResourcePlanter.sql</File>
+    </UpdateDatabase>
+
+    <UpdateText id="BP_Resource_Text">
+      <Properties>
+        <LoadOrder>10100</LoadOrder>
+      </Properties>
+      <File>BP_ResourcePlanter_Text.sql</File>
+    </UpdateText>
+
+    <AddGameplayScripts id="BP_Resource_Code">
+      <File>BP_ResourcePlanter.lua</File>
+    </AddGameplayScripts>
+  </InGameActions>
+
+  <Files>
+    <File>BP_ResourcePlanter.sql</File>
+    <File>BP_ResourcePlanter_Text.sql</File>
+    <File>BP_ResourcePlanter.lua</File>
+  </Files>
+
+  <LocalizedText>
+    <Text id="LOC_BP_RESOURCE_PLANTER_MOD_NAME">
+      <en_US>Builder Plants Resources</en_US>
+      <zh_Hans_CN>建造者可建造资源</zh_Hans_CN>
+    </Text>
+    <Text id="LOC_BP_RESOURCE_PLANTER_MOD_DESCRIPTION">
+      <en_US>Builders can plant Bonus, Strategic and Luxury resources on any valid terrain tile. Sea resources are included.</en_US>
+      <zh_Hans_CN>建造者可在符合地形的格子上种植任意加成、战略和奢侈资源,包含海域资源。</zh_Hans_CN>
+    </Text>
+  </LocalizedText>
+</Mod>
