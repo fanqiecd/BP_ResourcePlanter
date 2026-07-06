@@ -10,6 +10,14 @@
 --          这里不手工维护资源名单，而是完全由数据库驱动，这样只要 DLC 或其它
 --          模组的资源遵循标准 ResourceClassType 标签，就会被自动纳入。
 --          纯资源分类占位项（ARTIFACT / CITYSTATE / KNOWLEDGE）会被排除。
+--          此外必须再叠加"地图自然生成"过滤：Civ6 原版 Resources 表用 Frequency
+--          表示陆地、SeaFrequency 表示海洋的自然生成频率权重（均 NOT NULL DEFAULT 0，
+--          见 Base/Assets/Gameplay/Data/Schema/01_GameplaySchema.sql:2325-2344）。
+--          凡是 Frequency=0 且 SeaFrequency=0 的资源（例如 6 个垄断/独特奢侈
+--          RESOURCE_JEANS / PERFUME / COSMETICS / TOYS / CINNAMON / CLOVES，
+--          详见 Resources.xml:207-212）地图上从不随机生成，引擎对它们的
+--          spawn/渲染路径未初始化，强行种植会让 SetResourceType 在客户端崩溃。
+--          所以"可种植资源"必须同时满足类属过滤 + 至少有一侧频率 > 0。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS BPBuildableResources (
     ResourceName   TEXT PRIMARY KEY,   -- 去掉 'RESOURCE_' 前缀后的资源类型名
@@ -24,7 +32,8 @@ CREATE TABLE IF NOT EXISTS BPBuildableResources (
 -- 鲸鱼或珍珠）。
 -- 这里依赖地形名称，而不是可选的 Terrains.Water 字段，这样即便别的模组改了字段
 -- 命名，查询也更稳。
--- 只纳入标准的玩家可见资源类别。
+-- 只纳入标准的玩家可见资源类别，并且必须能被地图自然生成（任意一侧频率 > 0），
+-- 以排除垄断/独特奢侈（不会被地图刷出、引擎也未初始化其种植路径）。
 INSERT OR REPLACE INTO BPBuildableResources (ResourceName, PrereqTech, PrereqCivic, Domain)
 SELECT
     REPLACE(R.ResourceType, 'RESOURCE_', ''),
@@ -40,7 +49,11 @@ SELECT
         ELSE 'DOMAIN_SEA'
     END AS Domain
 FROM Resources R
-WHERE R.ResourceClassType IN ('RESOURCECLASS_BONUS','RESOURCECLASS_LUXURY','RESOURCECLASS_STRATEGIC');
+WHERE R.ResourceClassType IN ('RESOURCECLASS_BONUS','RESOURCECLASS_LUXURY','RESOURCECLASS_STRATEGIC')
+  -- 关键过滤：只保留"地图会随机生成"的资源。Frequency = 陆地频率，
+  -- SeaFrequency = 海洋频率，二者皆 0 表示不会被地图刷出（如 6 种垄断奢侈），
+  -- 强行种植会触发引擎内 SetResourceType 的崩溃，必须排除。
+  AND (R.Frequency > 0 OR R.SeaFrequency > 0);
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -- 第 2 步：为占位改良准备合法地形 / 地貌列表。
@@ -165,23 +178,9 @@ SELECT 'IMPROVEMENT_BP_'||B.ResourceName, 'UNIT_BUILDER'
 FROM BPBuildableResources B;
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
--- 第 5 步：处理可见性与解锁前置。
---          我们把每个资源自身的科技 / 市政前置同步给占位改良，这样建造菜单的
---          出现时机就会与原资源的正常揭示节奏一致。
---          对于没有科技前置、但有市政前置的资源，这里会写入 PrereqCivic。
---          SQLite 不支持 UPDATE ... JOIN，因此这里采用从 BPBuildableResources
---          反查并更新 Improvements 的写法。
+-- 第 5 步：资源解锁时机仍沿用 Resources 表，但不再把前置直接写回占位改良。
+--          原因：Improvement.PrereqTech / PrereqCivic 会让科技树 / 市政树把这些
+--          临时占位改良也当成正式解锁项展示，出现资源旁边多一张额外图标。
+--          改良是否应出现在建造者面板，改由 UnitPanel 共享 Lua 依据
+--          BPBuildableResources 对应资源的 PrereqTech / PrereqCivic 做本地过滤。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-UPDATE Improvements
-SET PrereqTech = (SELECT B.PrereqTech FROM BPBuildableResources B
-                  WHERE B.ResourceName = REPLACE(Improvements.ImprovementType, 'IMPROVEMENT_BP_', ''))
-WHERE ImprovementType IN (
-    SELECT 'IMPROVEMENT_BP_'||B.ResourceName FROM BPBuildableResources B WHERE B.PrereqTech IS NOT NULL
-);
-
-UPDATE Improvements
-SET PrereqCivic = (SELECT B.PrereqCivic FROM BPBuildableResources B
-                   WHERE B.ResourceName = REPLACE(Improvements.ImprovementType, 'IMPROVEMENT_BP_', ''))
-WHERE ImprovementType IN (
-    SELECT 'IMPROVEMENT_BP_'||B.ResourceName FROM BPBuildableResources B WHERE B.PrereqCivic IS NOT NULL
-);
