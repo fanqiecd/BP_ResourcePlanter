@@ -27,6 +27,10 @@
 local bpImprovementToResource = {}      -- [improvementIndex] = resourceIndex
 local bpTrackedImprovementIndexes = {}  -- 快速判断“这个改良是不是本模组的”
 local bpConvertingPlots = {}            -- 以地块索引为键的防重入保护
+local BP_VISIBLE_RESOURCE_PROPERTY = 'BP_VisibleResourceForYieldBonuses'
+local BP_BONUS_RESOURCE_PROPERTY = 'BP_HasBonusResourceForYieldBonuses'
+local BP_LUXURY_RESOURCE_PROPERTY = 'BP_HasLuxuryResourceForYieldBonuses'
+local BP_STRATEGIC_RESOURCE_PROPERTY = 'BP_HasStrategicResourceForYieldBonuses'
 
 local function BPInitLookup()
     -- GameInfo.Resources() 会遍历 Resources 表中的每一行。
@@ -54,6 +58,41 @@ end
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 local function BPClearImprovement(plot)
     ImprovementBuilder.SetImprovementType(plot, -1, -1)
+end
+
+local function BPSyncResourceYieldProperties(plot, resourceIndexOverride)
+    if plot == nil then
+        return
+    end
+
+    local resourceIndex = resourceIndexOverride
+    if resourceIndex == nil then
+        resourceIndex = plot:GetResourceType()
+    end
+
+    local bonusProperty = nil
+    local luxuryProperty = nil
+    local strategicProperty = nil
+
+    if resourceIndex ~= nil and resourceIndex >= 0 then
+        plot:SetProperty(BP_VISIBLE_RESOURCE_PROPERTY, 1)
+
+        local resourceInfo = GameInfo.Resources[resourceIndex]
+        local resourceClassType = resourceInfo and resourceInfo.ResourceClassType or nil
+        if resourceClassType == 'RESOURCECLASS_BONUS' then
+            bonusProperty = 1
+        elseif resourceClassType == 'RESOURCECLASS_LUXURY' then
+            luxuryProperty = 1
+        elseif resourceClassType == 'RESOURCECLASS_STRATEGIC' then
+            strategicProperty = 1
+        end
+    else
+        plot:SetProperty(BP_VISIBLE_RESOURCE_PROPERTY, nil)
+    end
+
+    plot:SetProperty(BP_BONUS_RESOURCE_PROPERTY, bonusProperty)
+    plot:SetProperty(BP_LUXURY_RESOURCE_PROPERTY, luxuryProperty)
+    plot:SetProperty(BP_STRATEGIC_RESOURCE_PROPERTY, strategicProperty)
 end
 
 local function BPIsValidPlot(plot, player)
@@ -104,7 +143,12 @@ local function BPPlaceResource(plot, resourceIndex, actingPlayerIndex)
     -- SetResourceType 的数量设为 1，这与原版加成 / 奢侈资源的单格规模，以及
     -- 单格战略资源的 1 单位产出保持一致。
     BPClearImprovement(plot)
+    -- 先把“这是资源格”的 property 预写到目标状态，再落资源。
+    -- ponytail: SetResourceType 本身更像是本回合触发地块产出重算的脏化点；把条件写晚了，
+    -- 引擎可能要等到下一回合才重新评估这类“资源可见性”地块加成。
+    BPSyncResourceYieldProperties(plot, resourceIndex)
     ResourceBuilder.SetResourceType(plot, resourceIndex, 1)
+    BPSyncResourceYieldProperties(plot)
     BPClearImprovement(plot)
 end
 
@@ -145,6 +189,7 @@ local function BPOnImprovementAddedToMap(x, y, improvementIndex, playerID)
     -- 如果有占位物残留，就防御性地把它清掉。
     if not player:IsHuman() then
         BPClearImprovement(plot)
+        BPSyncResourceYieldProperties(plot)
         print('[BP_ResourcePlanter] Conversion canceled: AI players may not plant resources.')
         bpConvertingPlots[plotKey] = nil
         return
@@ -153,6 +198,7 @@ local function BPOnImprovementAddedToMap(x, y, improvementIndex, playerID)
     -- 校验地块。如果不合法，就回滚占位改良，避免玩家看到与现有内容重叠的假占位物。
     if not BPIsValidPlot(plot, playerID) then
         BPClearImprovement(plot)
+        BPSyncResourceYieldProperties(plot)
         print('[BP_ResourcePlanter] Conversion canceled: plot ('..x..','..y..') is not eligible (already has resource / wonder / foreign territory).')
         bpConvertingPlots[plotKey] = nil
         return
@@ -161,6 +207,7 @@ local function BPOnImprovementAddedToMap(x, y, improvementIndex, playerID)
     local resourceIndex = bpImprovementToResource[improvementIndex]
     if resourceIndex == nil then
         BPClearImprovement(plot)
+        BPSyncResourceYieldProperties(plot)
         print('[BP_ResourcePlanter] Conversion canceled: no resource mapping for improvement index '..tostring(improvementIndex)..'.')
         bpConvertingPlots[plotKey] = nil
         return
@@ -171,6 +218,22 @@ local function BPOnImprovementAddedToMap(x, y, improvementIndex, playerID)
     print(string.format('[BP_ResourcePlanter] Planted %s at (%d,%d) for player %d.',
         resourceName, x, y, playerID))
     bpConvertingPlots[plotKey] = nil
+end
+
+local function BPSyncAllVisibleResourceYieldProperties()
+    local syncedCount = 0
+
+    for plotIndex = 0, Map.GetPlotCount() - 1 do
+        local plot = Map.GetPlotByIndex(plotIndex)
+        if plot ~= nil then
+            BPSyncResourceYieldProperties(plot)
+            if plot:GetResourceType() ~= -1 then
+                syncedCount = syncedCount + 1
+            end
+        end
+    end
+
+    print(string.format('[BP_ResourcePlanter] Synced visible-resource yield property on %d plots.', syncedCount))
 end
 
 local function BPSanitizeExistingDummyImprovements()
@@ -206,6 +269,7 @@ end
 local function BPInitialize()
     BPInitLookup()
     BPSanitizeExistingDummyImprovements()
+    BPSyncAllVisibleResourceYieldProperties()
     Events.ImprovementAddedToMap.Add(BPOnImprovementAddedToMap)
     print('[BP_ResourcePlanter] Initialized and listening for improvement placements.')
 end

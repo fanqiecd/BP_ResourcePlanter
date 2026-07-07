@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS BPBuildableResources (
 -- 只要某资源的任一合法地形是陆地，就归为 DOMAIN_LAND（这样像石油这种可陆可海
 -- 的资源仍会归到更常见的陆地种植场景）；否则归为 DOMAIN_SEA（纯海洋资源，例如
 -- 鲸鱼或珍珠）。
+-- 对于香蕉、可可豆、丝绸这类“只声明合法地貌、不声明合法地形”的资源，还要继续
+-- 看 Resource_ValidFeatures 对应的 Feature_ValidTerrains：只要这些地貌能落在任一
+-- 非海洋地形上，也应判为 DOMAIN_LAND，而不是误回退成海洋资源。
 -- 这里依赖地形名称，而不是可选的 Terrains.Water 字段，这样即便别的模组改了字段
 -- 命名，查询也更稳。
 -- 只纳入标准的玩家可见资源类别，并且必须能被地图自然生成（任意一侧频率 > 0），
@@ -44,6 +47,15 @@ SELECT
             SELECT 1 FROM Resource_ValidTerrains VT
             WHERE VT.ResourceType = R.ResourceType
               AND VT.TerrainType NOT IN ('TERRAIN_COAST','TERRAIN_OCEAN')
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM Resource_ValidFeatures RVF
+            JOIN Feature_ValidTerrains FVT ON FVT.FeatureType = RVF.FeatureType
+            JOIN Features F ON F.FeatureType = RVF.FeatureType
+            WHERE RVF.ResourceType = R.ResourceType
+              AND F.NaturalWonder = 0
+              AND FVT.TerrainType NOT IN ('TERRAIN_COAST','TERRAIN_OCEAN')
         )
         THEN 'DOMAIN_LAND'
         ELSE 'DOMAIN_SEA'
@@ -131,13 +143,16 @@ WHERE EXISTS (
 -- Resource_ValidFeatures），而不是只按宽泛的 Domain 分类判断。
 -- 这样可以避免玩家把小麦种进雨林、把松露种在冻土丘陵之类的不合理情况，也让每个
 -- 占位改良的“合法格子”尽量贴近原版资源自然会出现的位置。
--- 如果某资源没有声明任何 Resource_ValidTerrains，则回退到所在 Domain 的整组
--- 地形白名单，确保它至少还能被建造在某些位置。
+-- 如果某资源没有声明任何 Resource_ValidTerrains，但声明了 Resource_ValidFeatures，
+-- 就进一步把这些地貌可出现的地形并集折算成合法地形；这样香蕉 / 可可豆 / 香料 /
+-- 丝绸等“纯地貌资源”会落到正确的陆地地形，而不会被误送进海洋白名单。
+-- 只有当资源既没有声明地形、也没有声明地貌时，才回退到所在 Domain 的整组地形白名单。
 INSERT OR REPLACE INTO Improvement_ValidTerrains (ImprovementType, TerrainType)
 SELECT
     'IMPROVEMENT_BP_'||B.ResourceName,
     CASE
         WHEN RT.TerrainType IS NOT NULL THEN RT.TerrainType
+        WHEN FT.TerrainType IS NOT NULL THEN FT.TerrainType
         ELSE VT.TerrainType
     END
 FROM BPBuildableResources B
@@ -148,13 +163,28 @@ LEFT JOIN (
 ) RT
   ON RT.ResourceType = 'RESOURCE_'||B.ResourceName
   AND RT.TerrainType = VT.TerrainType
+LEFT JOIN (
+    SELECT DISTINCT RVF.ResourceType, FVT.TerrainType
+    FROM Resource_ValidFeatures RVF
+    JOIN Feature_ValidTerrains FVT ON FVT.FeatureType = RVF.FeatureType
+    JOIN Features F ON F.FeatureType = RVF.FeatureType
+    WHERE F.NaturalWonder = 0
+) FT
+  ON FT.ResourceType = 'RESOURCE_'||B.ResourceName
+  AND FT.TerrainType = VT.TerrainType
 WHERE (
     -- 资源显式声明了可生成地形：只允许这些地形的并集。
     EXISTS (SELECT 1 FROM Resource_ValidTerrains RVT WHERE RVT.ResourceType = 'RESOURCE_'||B.ResourceName)
     AND RT.TerrainType IS NOT NULL
 ) OR (
-    -- 资源没有声明任何合法地形：回退到整个 Domain 的地形列表。
+    -- 资源没有显式地形，但显式声明了可生成地貌：取这些地貌对应地形的并集。
     NOT EXISTS (SELECT 1 FROM Resource_ValidTerrains RVT WHERE RVT.ResourceType = 'RESOURCE_'||B.ResourceName)
+    AND EXISTS (SELECT 1 FROM Resource_ValidFeatures RVF WHERE RVF.ResourceType = 'RESOURCE_'||B.ResourceName)
+    AND FT.TerrainType IS NOT NULL
+) OR (
+    -- 资源既没有声明合法地形，也没有声明合法地貌：回退到整个 Domain 的地形列表。
+    NOT EXISTS (SELECT 1 FROM Resource_ValidTerrains RVT WHERE RVT.ResourceType = 'RESOURCE_'||B.ResourceName)
+    AND NOT EXISTS (SELECT 1 FROM Resource_ValidFeatures RVF WHERE RVF.ResourceType = 'RESOURCE_'||B.ResourceName)
 );
 
 INSERT OR REPLACE INTO Improvement_ValidFeatures (ImprovementType, FeatureType)
@@ -184,3 +214,183 @@ FROM BPBuildableResources B;
 --          改良是否应出现在建造者面板，改由 UnitPanel 共享 Lua 依据
 --          BPBuildableResources 对应资源的 PrereqTech / PrereqCivic 做本地过滤。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+-- 第 6 步：把“资源可见性”判定包装成通用兼容层，兼容所有走标准
+--          REQUIREMENT_PLOT_RESOURCE_VISIBLE 的官方 / 模组领袖与加成。
+--          同时也要兼容 REQUIREMENT_PLOT_RESOURCE_CLASS_TYPE_MATCHES
+--          （例如蒸汽时代维多利亚的“战略资源 +2 生产力”）。
+--          根因不是某个 leader modifier 数值写错，而是 ResourceBuilder.SetResourceType
+--          在 gameplay 运行时新塞资源后，不会稳定重算这类“按资源是否可见筛 plot yield /
+--          adjacency / building modifier”的 requirement；对部分“资源类别匹配”判定也有
+--          同样的问题。
+--          这里不按领袖 / 总督 / 万神殿逐个点名修，而是：
+--            1. 扫描所有 RequirementType = REQUIREMENT_PLOT_RESOURCE_VISIBLE 的 requirement；
+--            2. 为每个 requirement 包一层 TEST_ANY：
+--               - 原始“资源可见”判定；
+--               - 本模组 Lua 在种植 / 读档时同步到地块上的
+--                 BP_VisibleResourceForYieldBonuses property；
+--            3. 扫描所有 RequirementType = REQUIREMENT_PLOT_RESOURCE_CLASS_TYPE_MATCHES 且
+--               资源类别属于 BONUS / LUXURY / STRATEGIC 的 requirement；
+--            4. 为这些 requirement 同样包一层 TEST_ANY：
+--               - 原始“资源类别匹配”判定；
+--               - 本模组 Lua 同步到地块上的类别布尔 property。
+--            5. 把 RequirementSetRequirements 对这些 requirement 的引用统一改挂到 wrapper。
+--          这样官方内容与按标准写法实现的 mod 领袖，都能在运行时种出资源后立即吃到
+--          同一套加成，而不再依赖固定 RequirementId / ModifierId 名字。
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+DROP TABLE IF EXISTS BP_VisibleResourceRequirementsToWrap;
+
+CREATE TEMP TABLE BP_VisibleResourceRequirementsToWrap AS
+SELECT R.RequirementId AS RequirementId
+FROM Requirements R
+WHERE R.RequirementType = 'REQUIREMENT_PLOT_RESOURCE_VISIBLE'
+  AND R.RequirementId NOT LIKE 'BP_VISIBLE_RESOURCE_%';
+
+INSERT OR IGNORE INTO Requirements (RequirementId, RequirementType) VALUES
+    ('BP_REQUIRES_PLOT_SYNCED_VISIBLE_RESOURCE_PROPERTY', 'REQUIREMENT_PLOT_PROPERTY_MATCHES');
+
+INSERT OR REPLACE INTO RequirementArguments (RequirementId, Name, Value) VALUES
+    ('BP_REQUIRES_PLOT_SYNCED_VISIBLE_RESOURCE_PROPERTY', 'PropertyName', 'BP_VisibleResourceForYieldBonuses'),
+    ('BP_REQUIRES_PLOT_SYNCED_VISIBLE_RESOURCE_PROPERTY', 'PropertyMinimum', '1');
+
+INSERT OR IGNORE INTO RequirementSets (RequirementSetId, RequirementSetType)
+SELECT
+    'BP_VISIBLE_RESOURCE_WRAPPER_SET_' || RequirementId,
+    'REQUIREMENTSET_TEST_ANY'
+FROM BP_VisibleResourceRequirementsToWrap;
+
+INSERT OR IGNORE INTO Requirements (RequirementId, RequirementType)
+SELECT
+    'BP_VISIBLE_RESOURCE_WRAPPER_REQ_' || RequirementId,
+    'REQUIREMENT_REQUIREMENTSET_IS_MET'
+FROM BP_VisibleResourceRequirementsToWrap;
+
+INSERT OR IGNORE INTO Requirements (RequirementId, RequirementType)
+SELECT
+    'BP_VISIBLE_RESOURCE_ORIGINAL_REQ_' || RequirementId,
+    'REQUIREMENT_PLOT_RESOURCE_VISIBLE'
+FROM BP_VisibleResourceRequirementsToWrap;
+
+INSERT OR REPLACE INTO RequirementArguments (RequirementId, Name, Value)
+SELECT
+    'BP_VISIBLE_RESOURCE_WRAPPER_REQ_' || RequirementId,
+    'RequirementSetId',
+    'BP_VISIBLE_RESOURCE_WRAPPER_SET_' || RequirementId
+FROM BP_VisibleResourceRequirementsToWrap;
+
+INSERT OR IGNORE INTO RequirementSetRequirements (RequirementSetId, RequirementId)
+SELECT
+    'BP_VISIBLE_RESOURCE_WRAPPER_SET_' || RequirementId,
+    'BP_VISIBLE_RESOURCE_ORIGINAL_REQ_' || RequirementId
+FROM BP_VisibleResourceRequirementsToWrap;
+
+INSERT OR IGNORE INTO RequirementSetRequirements (RequirementSetId, RequirementId)
+SELECT
+    'BP_VISIBLE_RESOURCE_WRAPPER_SET_' || RequirementId,
+    'BP_REQUIRES_PLOT_SYNCED_VISIBLE_RESOURCE_PROPERTY'
+FROM BP_VisibleResourceRequirementsToWrap;
+
+UPDATE RequirementSetRequirements
+SET RequirementId = 'BP_VISIBLE_RESOURCE_WRAPPER_REQ_' || RequirementSetRequirements.RequirementId
+WHERE EXISTS (
+    SELECT 1
+    FROM BP_VisibleResourceRequirementsToWrap W
+    WHERE W.RequirementId = RequirementSetRequirements.RequirementId
+);
+
+DROP TABLE IF EXISTS BP_VisibleResourceRequirementsToWrap;
+
+DROP TABLE IF EXISTS BP_ResourceClassRequirementsToWrap;
+
+CREATE TEMP TABLE BP_ResourceClassRequirementsToWrap AS
+SELECT
+    R.RequirementId AS RequirementId,
+    MAX(CASE WHEN RA.Name = 'ResourceClassType' THEN RA.Value END) AS ResourceClassType,
+    CASE MAX(CASE WHEN RA.Name = 'ResourceClassType' THEN RA.Value END)
+        WHEN 'RESOURCECLASS_BONUS' THEN 'BP_HasBonusResourceForYieldBonuses'
+        WHEN 'RESOURCECLASS_LUXURY' THEN 'BP_HasLuxuryResourceForYieldBonuses'
+        WHEN 'RESOURCECLASS_STRATEGIC' THEN 'BP_HasStrategicResourceForYieldBonuses'
+    END AS PropertyName
+FROM Requirements R
+JOIN RequirementArguments RA ON RA.RequirementId = R.RequirementId
+WHERE R.RequirementType = 'REQUIREMENT_PLOT_RESOURCE_CLASS_TYPE_MATCHES'
+GROUP BY R.RequirementId
+HAVING MAX(CASE WHEN RA.Name = 'ResourceClassType' THEN RA.Value END) IN (
+    'RESOURCECLASS_BONUS',
+    'RESOURCECLASS_LUXURY',
+    'RESOURCECLASS_STRATEGIC'
+);
+
+INSERT OR IGNORE INTO RequirementSets (RequirementSetId, RequirementSetType)
+SELECT
+    'BP_RESOURCE_CLASS_WRAPPER_SET_' || RequirementId,
+    'REQUIREMENTSET_TEST_ANY'
+FROM BP_ResourceClassRequirementsToWrap;
+
+INSERT OR IGNORE INTO Requirements (RequirementId, RequirementType)
+SELECT
+    'BP_RESOURCE_CLASS_WRAPPER_REQ_' || RequirementId,
+    'REQUIREMENT_REQUIREMENTSET_IS_MET'
+FROM BP_ResourceClassRequirementsToWrap;
+
+INSERT OR IGNORE INTO Requirements (RequirementId, RequirementType)
+SELECT
+    'BP_RESOURCE_CLASS_ORIGINAL_REQ_' || RequirementId,
+    'REQUIREMENT_PLOT_RESOURCE_CLASS_TYPE_MATCHES'
+FROM BP_ResourceClassRequirementsToWrap;
+
+INSERT OR IGNORE INTO Requirements (RequirementId, RequirementType)
+SELECT
+    'BP_RESOURCE_CLASS_PROPERTY_REQ_' || RequirementId,
+    'REQUIREMENT_PLOT_PROPERTY_MATCHES'
+FROM BP_ResourceClassRequirementsToWrap;
+
+INSERT OR REPLACE INTO RequirementArguments (RequirementId, Name, Value)
+SELECT
+    'BP_RESOURCE_CLASS_WRAPPER_REQ_' || RequirementId,
+    'RequirementSetId',
+    'BP_RESOURCE_CLASS_WRAPPER_SET_' || RequirementId
+FROM BP_ResourceClassRequirementsToWrap;
+
+INSERT OR REPLACE INTO RequirementArguments (RequirementId, Name, Value)
+SELECT
+    'BP_RESOURCE_CLASS_ORIGINAL_REQ_' || RequirementId,
+    'ResourceClassType',
+    ResourceClassType
+FROM BP_ResourceClassRequirementsToWrap;
+
+INSERT OR REPLACE INTO RequirementArguments (RequirementId, Name, Value)
+SELECT
+    'BP_RESOURCE_CLASS_PROPERTY_REQ_' || RequirementId,
+    'PropertyName',
+    PropertyName
+FROM BP_ResourceClassRequirementsToWrap;
+
+INSERT OR REPLACE INTO RequirementArguments (RequirementId, Name, Value)
+SELECT
+    'BP_RESOURCE_CLASS_PROPERTY_REQ_' || RequirementId,
+    'PropertyMinimum',
+    '1'
+FROM BP_ResourceClassRequirementsToWrap;
+
+INSERT OR IGNORE INTO RequirementSetRequirements (RequirementSetId, RequirementId)
+SELECT
+    'BP_RESOURCE_CLASS_WRAPPER_SET_' || RequirementId,
+    'BP_RESOURCE_CLASS_ORIGINAL_REQ_' || RequirementId
+FROM BP_ResourceClassRequirementsToWrap;
+
+INSERT OR IGNORE INTO RequirementSetRequirements (RequirementSetId, RequirementId)
+SELECT
+    'BP_RESOURCE_CLASS_WRAPPER_SET_' || RequirementId,
+    'BP_RESOURCE_CLASS_PROPERTY_REQ_' || RequirementId
+FROM BP_ResourceClassRequirementsToWrap;
+
+UPDATE RequirementSetRequirements
+SET RequirementId = 'BP_RESOURCE_CLASS_WRAPPER_REQ_' || RequirementSetRequirements.RequirementId
+WHERE EXISTS (
+    SELECT 1
+    FROM BP_ResourceClassRequirementsToWrap W
+    WHERE W.RequirementId = RequirementSetRequirements.RequirementId
+);
+
+DROP TABLE IF EXISTS BP_ResourceClassRequirementsToWrap;

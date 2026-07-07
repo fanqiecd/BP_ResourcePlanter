@@ -1,10 +1,11 @@
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 
 modinfo = (ROOT / "BP_ResourcePlanter.modinfo").read_text(encoding="utf-8")
 main_sql = (ROOT / "BP_ResourcePlanter.sql").read_text(encoding="utf-8")
+main_lua = (ROOT / "BP_ResourcePlanter.lua").read_text(encoding="utf-8")
 text_sql = (ROOT / "BP_ResourcePlanter_Text.sql").read_text(encoding="utf-8")
 shared_lua = (ROOT / "UI" / "Replacements" / "BP_ResourcePlantUnitPanel_Shared.lua").read_text(encoding="utf-8")
 chooser_xml = (ROOT / "UI" / "Additions" / "BPResourceChooser.xml").read_text(encoding="utf-8")
@@ -87,6 +88,27 @@ assert "(R.Frequency > 0 OR R.SeaFrequency > 0)" in main_sql, (
     "BPBuildableResources 收集 SQL 必须叠加 (R.Frequency > 0 OR R.SeaFrequency > 0) 谓词,"
     "排除不会随机生成的资源以避免引擎崩溃"
 )
+
+# 资源可见性 / 资源类别 yield modifier 都走通用 wrapper，不再维护维多利亚专属补丁。
+for needle in (
+    "BP_VISIBLE_RESOURCE_WRAPPER_REQ_",
+    "BP_RESOURCE_CLASS_WRAPPER_REQ_",
+    "BP_RESOURCE_CLASS_PROPERTY_REQ_",
+    "BP_REQUIRES_PLOT_SYNCED_VISIBLE_RESOURCE_PROPERTY",
+    "BP_HasStrategicResourceForYieldBonuses",
+    "REQUIREMENT_PLOT_PROPERTY_MATCHES",
+):
+    assert needle in main_sql, f"资源 yield wrapper 缺少 SQL 关键逻辑: {needle}"
+
+for needle in (
+    "BP_VISIBLE_RESOURCE_PROPERTY",
+    "BP_BONUS_RESOURCE_PROPERTY",
+    "BP_LUXURY_RESOURCE_PROPERTY",
+    "BP_STRATEGIC_RESOURCE_PROPERTY",
+    "BPSyncResourceYieldProperties",
+    "BPSyncAllVisibleResourceYieldProperties",
+):
+    assert needle in main_lua, f"资源 yield property 同步缺少 Lua 关键逻辑: {needle}"
 
 for needle in (
     "BPCollectResourcePlantActions",

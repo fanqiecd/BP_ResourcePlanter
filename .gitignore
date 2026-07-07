@@ -40,6 +40,11 @@ credentials/
 tmp/
 temp/
 /tests/
+!/tests/
+/tests/*
+!/tests/test_feature_only_resource_terrains.py
+!/tests/test_resource_chooser_static.py
+!/tests/test_visible_resource_wrapper.py
 /plans/
 /reviews/
 /suggestions/

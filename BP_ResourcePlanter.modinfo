@@ -12,7 +12,7 @@
   <InGameActions>
     <UpdateDatabase id="BP_Resource_Data">
       <Properties>
-        <LoadOrder>10100</LoadOrder>
+        <LoadOrder>99999</LoadOrder>
       </Properties>
       <File>BP_ResourcePlanter.sql</File>
     </UpdateDatabase>
@@ -74,7 +74,6 @@
     <File>UI/Additions/BPResourceChooser.lua</File>
     <File>UI/Replacements/BP_ResourcePlantUnitPanel_Shared.lua</File>
     <File>UI/Replacements/UnitPanel_BP_All.lua</File>
-    <File>verify_resource_chooser.py</File>
   </Files>
 
   <LocalizedText>

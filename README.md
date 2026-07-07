@@ -26,7 +26,10 @@ BP_ResourcePlanter/
 ├── BP_ResourcePlanter.sql
 ├── BP_ResourcePlanter_Text.sql
 ├── BP_ResourcePlanter.lua
-├── verify_resource_chooser.py
+├── tests/
+│   ├── test_feature_only_resource_terrains.py
+│   ├── test_resource_chooser_static.py
+│   └── test_visible_resource_wrapper.py
 ├── UI/
 │   ├── Additions/
 │   │   ├── BPResourceChooser.lua
@@ -48,7 +51,7 @@ BP_ResourcePlanter/
 2. 修改 `BP_ResourcePlanter.lua` 调整资源生成、校验和清理逻辑。
 3. 修改 `UI/Additions/` 或 `UI/Replacements/` 调整资源选择器与建造者面板入口。
 4. 检查 `BP_ResourcePlanter.modinfo` 的加载动作和顺序是否仍正确。
-5. 运行 `python verify_resource_chooser.py` 做静态回归检查。
+5. 运行 `python tests/test_resource_chooser_static.py` 做静态回归检查。
 6. 进入游戏验证建造菜单、资源名称、资源落地效果、科技/市政树显示和地块视觉表现。
 
 ## 安装与验证
