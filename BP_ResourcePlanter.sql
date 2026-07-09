@@ -139,63 +139,37 @@ WHERE EXISTS (
     SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'Improvements_XP2'
 );
 
--- 放置规则优先跟随资源自身的自然生成规则（Resource_ValidTerrains /
--- Resource_ValidFeatures），而不是只按宽泛的 Domain 分类判断。
--- 这样可以避免玩家把小麦种进雨林、把松露种在冻土丘陵之类的不合理情况，也让每个
--- 占位改良的“合法格子”尽量贴近原版资源自然会出现的位置。
--- 如果某资源没有声明任何 Resource_ValidTerrains，但声明了 Resource_ValidFeatures，
--- 就进一步把这些地貌可出现的地形并集折算成合法地形；这样香蕉 / 可可豆 / 香料 /
--- 丝绸等“纯地貌资源”会落到正确的陆地地形，而不会被误送进海洋白名单。
--- 只有当资源既没有声明地形、也没有声明地貌时，才回退到所在 Domain 的整组地形白名单。
+-- 资源种植不再要求满足原版资源的具体地形 / 地貌落点。
+-- 这里仅按 Domain 放开：
+--   * 陆地资源：可放在全部陆地地形
+--   * 海洋资源：可放在海岸 / 远洋
+-- 这样就取消了“香蕉必须雨林”“钻石必须丘陵”等资源级地块限制，只保留陆海域区分。
 INSERT OR REPLACE INTO Improvement_ValidTerrains (ImprovementType, TerrainType)
 SELECT
     'IMPROVEMENT_BP_'||B.ResourceName,
-    CASE
-        WHEN RT.TerrainType IS NOT NULL THEN RT.TerrainType
-        WHEN FT.TerrainType IS NOT NULL THEN FT.TerrainType
-        ELSE VT.TerrainType
-    END
+    VT.TerrainType
 FROM BPBuildableResources B
 JOIN BPValidTerrains VT ON VT.Domain = B.Domain
-LEFT JOIN (
-    SELECT DISTINCT RVT.ResourceType, RVT.TerrainType
-    FROM Resource_ValidTerrains RVT
-) RT
-  ON RT.ResourceType = 'RESOURCE_'||B.ResourceName
-  AND RT.TerrainType = VT.TerrainType
-LEFT JOIN (
-    SELECT DISTINCT RVF.ResourceType, FVT.TerrainType
-    FROM Resource_ValidFeatures RVF
-    JOIN Feature_ValidTerrains FVT ON FVT.FeatureType = RVF.FeatureType
-    JOIN Features F ON F.FeatureType = RVF.FeatureType
-    WHERE F.NaturalWonder = 0
-) FT
-  ON FT.ResourceType = 'RESOURCE_'||B.ResourceName
-  AND FT.TerrainType = VT.TerrainType
-WHERE (
-    -- 资源显式声明了可生成地形：只允许这些地形的并集。
-    EXISTS (SELECT 1 FROM Resource_ValidTerrains RVT WHERE RVT.ResourceType = 'RESOURCE_'||B.ResourceName)
-    AND RT.TerrainType IS NOT NULL
-) OR (
-    -- 资源没有显式地形，但显式声明了可生成地貌：取这些地貌对应地形的并集。
-    NOT EXISTS (SELECT 1 FROM Resource_ValidTerrains RVT WHERE RVT.ResourceType = 'RESOURCE_'||B.ResourceName)
-    AND EXISTS (SELECT 1 FROM Resource_ValidFeatures RVF WHERE RVF.ResourceType = 'RESOURCE_'||B.ResourceName)
-    AND FT.TerrainType IS NOT NULL
-) OR (
-    -- 资源既没有声明合法地形，也没有声明合法地貌：回退到整个 Domain 的地形列表。
-    NOT EXISTS (SELECT 1 FROM Resource_ValidTerrains RVT WHERE RVT.ResourceType = 'RESOURCE_'||B.ResourceName)
-    AND NOT EXISTS (SELECT 1 FROM Resource_ValidFeatures RVF WHERE RVF.ResourceType = 'RESOURCE_'||B.ResourceName)
+;
+
+-- 资源种植不再要求命中特定资源自己的 Feature 条件，但仍要允许建在同域的普通地貌格上，
+-- 否则像泛滥平原、沼泽、森林、雨林这类带 Feature 的合法陆地格会被游戏底层直接判成
+-- “改良不可建造”，按钮整颗发灰。这里统一按 Domain 放开普通地貌：
+--   * 陆地资源：允许全部陆地地貌
+--   * 海洋资源：允许全部海洋地貌
+-- 仍然依赖 BPValidFeatures 过滤自然奇观等不该动的特殊地貌。
+DELETE FROM Improvement_ValidFeatures
+WHERE ImprovementType IN (
+    SELECT 'IMPROVEMENT_BP_'||B.ResourceName
+    FROM BPBuildableResources B
 );
 
 INSERT OR REPLACE INTO Improvement_ValidFeatures (ImprovementType, FeatureType)
 SELECT
     'IMPROVEMENT_BP_'||B.ResourceName,
-    RF.FeatureType
+    VF.FeatureType
 FROM BPBuildableResources B
-JOIN (
-    SELECT DISTINCT RFR.ResourceType, RFR.FeatureType
-    FROM Resource_ValidFeatures RFR
-) RF ON RF.ResourceType = 'RESOURCE_'||B.ResourceName;
+JOIN BPValidFeatures VF ON VF.Domain = B.Domain;
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -- 第 4 步：把建造者挂到每个占位改良上。
@@ -208,14 +182,76 @@ SELECT 'IMPROVEMENT_BP_'||B.ResourceName, 'UNIT_BUILDER'
 FROM BPBuildableResources B;
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
--- 第 5 步：资源解锁时机仍沿用 Resources 表，但不再把前置直接写回占位改良。
+-- 第 5 步：注册可种植地貌（森林 / 雨林）。
+--          它们不混入 BPBuildableResources，而是走一张独立表，避免把原版 Feature
+--          伪装成 Resource。雨林在原版数据里对应 FEATURE_JUNGLE。
+--          地貌列表不再绑定任何科技 / 市政前置；只要格子合法，就允许直接种植。
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS BPBuildableFeatures (
+    FeatureType   TEXT PRIMARY KEY,
+    Name          TEXT NOT NULL,
+    Icon          TEXT NOT NULL,
+    PrereqTech    TEXT,
+    PrereqCivic   TEXT,
+    Domain        TEXT NOT NULL
+);
+
+INSERT OR REPLACE INTO BPBuildableFeatures (FeatureType, Name, Icon, PrereqTech, PrereqCivic, Domain)
+SELECT
+    F.FeatureType,
+    F.Name,
+    'ICON_UNITOPERATION_PLANT_FOREST',
+    NULL,
+    NULL,
+    'DOMAIN_LAND'
+FROM Features F
+WHERE F.FeatureType IN ('FEATURE_FOREST', 'FEATURE_JUNGLE')
+  AND F.NaturalWonder = 0;
+
+INSERT OR REPLACE INTO Types (Type, Kind)
+SELECT 'IMPROVEMENT_BP_' || REPLACE(BF.FeatureType, 'FEATURE_', 'FEATURE_'), 'KIND_IMPROVEMENT'
+FROM BPBuildableFeatures BF;
+
+INSERT OR REPLACE INTO Improvements (
+    ImprovementType, Name,                               Description,                                              Icon,      PlunderType, Buildable, Workable, Domain
+)
+SELECT
+    'IMPROVEMENT_BP_' || REPLACE(BF.FeatureType, 'FEATURE_', 'FEATURE_'),
+    BF.Name,
+    'LOC_IMPROVEMENT_BP_GENERIC_FEATURE_DESCRIPTION',
+    BF.Icon,
+    'NO_PLUNDER',
+    1, 0,
+    BF.Domain
+FROM BPBuildableFeatures BF;
+
+INSERT OR REPLACE INTO Improvements_XP2 (ImprovementType, DisasterResistant)
+SELECT 'IMPROVEMENT_BP_' || REPLACE(BF.FeatureType, 'FEATURE_', 'FEATURE_'), 1
+FROM BPBuildableFeatures BF
+WHERE EXISTS (
+    SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'Improvements_XP2'
+);
+
+INSERT OR REPLACE INTO Improvement_ValidTerrains (ImprovementType, TerrainType)
+SELECT
+    'IMPROVEMENT_BP_' || REPLACE(BF.FeatureType, 'FEATURE_', 'FEATURE_'),
+    FVT.TerrainType
+FROM BPBuildableFeatures BF
+JOIN Feature_ValidTerrains FVT ON FVT.FeatureType = BF.FeatureType;
+
+INSERT OR REPLACE INTO Improvement_ValidBuildUnits (ImprovementType, UnitType)
+SELECT 'IMPROVEMENT_BP_' || REPLACE(BF.FeatureType, 'FEATURE_', 'FEATURE_'), 'UNIT_BUILDER'
+FROM BPBuildableFeatures BF;
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-- 第 6 步：资源解锁时机仍沿用 Resources 表，但不再把前置直接写回占位改良。
 --          原因：Improvement.PrereqTech / PrereqCivic 会让科技树 / 市政树把这些
 --          临时占位改良也当成正式解锁项展示，出现资源旁边多一张额外图标。
 --          改良是否应出现在建造者面板，改由 UnitPanel 共享 Lua 依据
 --          BPBuildableResources 对应资源的 PrereqTech / PrereqCivic 做本地过滤。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
--- 第 6 步：把“资源可见性”判定包装成通用兼容层，兼容所有走标准
+-- 第 7 步：把“资源可见性”判定包装成通用兼容层，兼容所有走标准
 --          REQUIREMENT_PLOT_RESOURCE_VISIBLE 的官方 / 模组领袖与加成。
 --          同时也要兼容 REQUIREMENT_PLOT_RESOURCE_CLASS_TYPE_MATCHES
 --          （例如蒸汽时代维多利亚的“战略资源 +2 生产力”）。

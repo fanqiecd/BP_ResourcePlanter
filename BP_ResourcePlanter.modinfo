@@ -30,7 +30,7 @@
 
     <ReplaceUIScript id="BP_Resource_UnitPanel_Replace">
       <Properties>
-        <LoadOrder>12000</LoadOrder>
+        <LoadOrder>200000</LoadOrder>
         <LuaContext>UnitPanel</LuaContext>
         <LuaReplace>UI/Replacements/UnitPanel_BP_All.lua</LuaReplace>
       </Properties>

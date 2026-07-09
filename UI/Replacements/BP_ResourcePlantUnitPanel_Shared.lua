@@ -26,6 +26,10 @@ local BP_RESOURCE_CLASS_PRIORITY:table = {
     RESOURCECLASS_BONUS = 3
 };
 
+local BP_FEATURE_FILTER_KEY:string = "FEATURE";
+local m_bpResourceValidTerrainsByType:table = nil;
+local m_bpResourceValidFeaturesByType:table = nil;
+
 -- ===========================================================================
 -- 只展示当前玩家已解锁的资源：占位改良本身不再挂科技/市政前置，避免科技树把它
 -- 当成正式解锁项显示出来。
@@ -53,6 +57,78 @@ local function BPHasPlayerUnlockedResource(resourceInfo:table, player:table)
         end
     end
 
+    return true;
+end
+
+local function BPHasPlayerUnlockedFeature(featureInfo:table, player:table)
+    if featureInfo == nil then
+        return false;
+    end
+
+    return true;
+end
+
+local function BPBuildResourcePlacementRuleCache()
+    if m_bpResourceValidTerrainsByType ~= nil and m_bpResourceValidFeaturesByType ~= nil then
+        return;
+    end
+
+    m_bpResourceValidTerrainsByType = {};
+    m_bpResourceValidFeaturesByType = {};
+
+    for row in GameInfo.Resource_ValidTerrains() do
+        if row.ResourceType ~= nil and row.TerrainType ~= nil then
+            if m_bpResourceValidTerrainsByType[row.ResourceType] == nil then
+                m_bpResourceValidTerrainsByType[row.ResourceType] = {};
+            end
+            m_bpResourceValidTerrainsByType[row.ResourceType][row.TerrainType] = true;
+        end
+    end
+
+    for row in GameInfo.Resource_ValidFeatures() do
+        if row.ResourceType ~= nil and row.FeatureType ~= nil then
+            if m_bpResourceValidFeaturesByType[row.ResourceType] == nil then
+                m_bpResourceValidFeaturesByType[row.ResourceType] = {};
+            end
+            m_bpResourceValidFeaturesByType[row.ResourceType][row.FeatureType] = true;
+        end
+    end
+end
+
+local function BPGetPlotTerrainType(plot:table)
+    if plot == nil then
+        return nil;
+    end
+
+    local terrainIndex:number = plot:GetTerrainType();
+    if terrainIndex == nil or terrainIndex < 0 then
+        return nil;
+    end
+
+    local terrainInfo:table = GameInfo.Terrains[terrainIndex];
+    return terrainInfo and terrainInfo.TerrainType or nil;
+end
+
+local function BPGetPlotFeatureType(plot:table)
+    if plot == nil then
+        return nil;
+    end
+
+    local featureIndex:number = plot:GetFeatureType();
+    if featureIndex == nil or featureIndex < 0 then
+        return nil;
+    end
+
+    local featureInfo:table = GameInfo.Features[featureIndex];
+    return featureInfo and featureInfo.FeatureType or nil;
+end
+
+local function BPPlotMatchesResourcePlacementRules(plot:table, resourceInfo:table)
+    if plot == nil or resourceInfo == nil or resourceInfo.ResourceType == nil then
+        return false;
+    end
+
+    -- 资源种植已取消具体地形 / 地貌限制，这里只保留“资源对象有效”的最小校验。
     return true;
 end
 
@@ -86,8 +162,80 @@ local function BPGetResourceInfoFromAction(action:table)
     end
 
     local resourceName:string = string.sub(improvementInfo.ImprovementType, string.len(BP_IMPROVEMENT_PREFIX) + 1);
+    if string.sub(resourceName, 1, 8) == "FEATURE_" then
+        return nil, improvementInfo;
+    end
     local resourceType:string = "RESOURCE_" .. resourceName;
     return GameInfo.Resources[resourceType], improvementInfo;
+end
+
+local function BPGetFeatureInfoFromAction(action:table)
+    if action == nil or action.CallbackVoid1 == nil then
+        return nil, nil;
+    end
+
+    local improvementInfo:table = GameInfo.Improvements[action.CallbackVoid1];
+    if improvementInfo == nil or improvementInfo.ImprovementType == nil then
+        return nil, nil;
+    end
+
+    local featureType:string = string.sub(improvementInfo.ImprovementType, string.len(BP_IMPROVEMENT_PREFIX) + 1);
+    if string.sub(featureType, 1, 8) ~= "FEATURE_" then
+        return nil, improvementInfo;
+    end
+
+    return GameInfo.Features[featureType], improvementInfo;
+end
+
+local function BPDescribeImprovementTarget(improvementHash:number)
+    if improvementHash == nil then
+        return "unknown", "UNKNOWN", "Unknown"
+    end
+
+    local improvementInfo:table = GameInfo.Improvements[improvementHash]
+    if improvementInfo == nil or improvementInfo.ImprovementType == nil then
+        return "unknown", "UNKNOWN", "Unknown"
+    end
+
+    local suffix:string = string.sub(improvementInfo.ImprovementType, string.len(BP_IMPROVEMENT_PREFIX) + 1)
+    if string.sub(suffix, 1, 8) == "FEATURE_" then
+        local featureType:string = suffix
+        local featureInfo:table = GameInfo.Features[featureType]
+        local featureName:string = featureInfo and Locale.Lookup(featureInfo.Name) or featureType
+        return "feature", featureType, featureName
+    end
+
+    local resourceType:string = "RESOURCE_" .. suffix
+    local resourceInfo:table = GameInfo.Resources[resourceType]
+    local resourceName:string = resourceInfo and Locale.Lookup(resourceInfo.Name) or resourceType
+    return "resource", resourceType, resourceName
+end
+
+local function BPDescribeCurrentPlotForDebug(plot:table)
+    if plot == nil then
+        return "plot=nil"
+    end
+
+    local terrainType:string = BPGetPlotTerrainType(plot) or "NONE"
+    local featureType:string = BPGetPlotFeatureType(plot) or "NONE"
+    local resourceType:string = "NONE"
+    local resourceIndex:number = plot:GetResourceType()
+    if resourceIndex ~= nil and resourceIndex >= 0 then
+        local resourceInfo:table = GameInfo.Resources[resourceIndex]
+        resourceType = resourceInfo and resourceInfo.ResourceType or tostring(resourceIndex)
+    end
+
+    return string.format(
+        "plot=(%d,%d) terrain=%s feature=%s resource=%s owner=%s district=%s improvement=%s",
+        plot:GetX(),
+        plot:GetY(),
+        tostring(terrainType),
+        tostring(featureType),
+        tostring(resourceType),
+        tostring(plot:GetOwner()),
+        tostring(plot:GetDistrictType()),
+        tostring(plot:GetImprovementType())
+    )
 end
 
 -- ===========================================================================
@@ -98,16 +246,30 @@ local function BPSortResourcePlantActions(actions:table)
         function(a:table, b:table)
             local resourceInfoA:table, improvementInfoA:table = BPGetResourceInfoFromAction(a);
             local resourceInfoB:table, improvementInfoB:table = BPGetResourceInfoFromAction(b);
+            local featureInfoA:table = nil;
+            local featureInfoB:table = nil;
+
+            if resourceInfoA == nil then
+                featureInfoA, improvementInfoA = BPGetFeatureInfoFromAction(a);
+            end
+
+            if resourceInfoB == nil then
+                featureInfoB, improvementInfoB = BPGetFeatureInfoFromAction(b);
+            end
 
             local priorityA:number = 99;
             local priorityB:number = 99;
 
             if resourceInfoA ~= nil and BP_RESOURCE_CLASS_PRIORITY[resourceInfoA.ResourceClassType] ~= nil then
                 priorityA = BP_RESOURCE_CLASS_PRIORITY[resourceInfoA.ResourceClassType];
+            elseif featureInfoA ~= nil then
+                priorityA = 4;
             end
 
             if resourceInfoB ~= nil and BP_RESOURCE_CLASS_PRIORITY[resourceInfoB.ResourceClassType] ~= nil then
                 priorityB = BP_RESOURCE_CLASS_PRIORITY[resourceInfoB.ResourceClassType];
+            elseif featureInfoB ~= nil then
+                priorityB = 4;
             end
 
             if priorityA ~= priorityB then
@@ -141,7 +303,17 @@ local function BPRequestPlantImprovement(improvementHash:number)
 
     local pSelectedUnit:table = UI.GetHeadSelectedUnit();
     if pSelectedUnit ~= nil then
-        print("[BP_ResourcePlanter] Requesting BUILD_IMPROVEMENT for hash " .. tostring(improvementHash) .. ".")
+        local targetKind:string, targetType:string, targetName:string = BPDescribeImprovementTarget(improvementHash)
+        local selectedPlot:table = Map.GetPlot(pSelectedUnit:GetX(), pSelectedUnit:GetY())
+        print(string.format(
+            "[BP_ResourcePlanter] Requesting BUILD_IMPROVEMENT target=%s targetType=%s targetName=%s unitOwner=%d %s hash=%s.",
+            tostring(targetKind),
+            tostring(targetType),
+            tostring(targetName),
+            pSelectedUnit:GetOwner(),
+            BPDescribeCurrentPlotForDebug(selectedPlot),
+            tostring(improvementHash)
+        ))
         local tParameters:table = {};
         tParameters[UnitOperationTypes.PARAM_X] = pSelectedUnit:GetX();
         tParameters[UnitOperationTypes.PARAM_Y] = pSelectedUnit:GetY();
@@ -175,6 +347,22 @@ local function BPShowResourceChooser(actions:table)
 
     for _, action in ipairs(actions) do
         local resourceInfo, improvementInfo = BPGetResourceInfoFromAction(action);
+        local featureInfo = nil;
+        local filterKey = nil;
+
+        if resourceInfo ~= nil then
+            if resourceInfo.ResourceClassType == "RESOURCECLASS_BONUS" then
+                filterKey = "BONUS";
+            elseif resourceInfo.ResourceClassType == "RESOURCECLASS_LUXURY" then
+                filterKey = "LUXURY";
+            elseif resourceInfo.ResourceClassType == "RESOURCECLASS_STRATEGIC" then
+                filterKey = "STRATEGIC";
+            end
+        else
+            featureInfo, improvementInfo = BPGetFeatureInfoFromAction(action);
+            filterKey = BP_FEATURE_FILTER_KEY;
+        end
+
         local improvementHash:number = action.CallbackVoid1;
         local buttonLabel:string = "";
         if improvementInfo ~= nil then
@@ -185,15 +373,19 @@ local function BPShowResourceChooser(actions:table)
             ImprovementHash = improvementHash,
             Name = buttonLabel,
             IconId = improvementInfo and improvementInfo.Icon or BP_SINGLE_ACTION_ICON,
+            EntryKind = resourceInfo and 'RESOURCE' or 'FEATURE',
+            ResourceType = resourceInfo and resourceInfo.ResourceType or nil,
             -- 资源分类(供选择器 UI 端做"全部/加成/奢侈/战略"本地过滤);
             -- 取自 GameInfo.Resources[...].ResourceClassType,形如
             -- "RESOURCECLASS_BONUS" / "RESOURCECLASS_LUXURY" / "RESOURCECLASS_STRATEGIC"。
-            ResourceClassType = resourceInfo and resourceInfo.ResourceClassType or nil
+            ResourceClassType = resourceInfo and resourceInfo.ResourceClassType or nil,
+            FeatureType = featureInfo and featureInfo.FeatureType or nil,
+            FilterKey = filterKey
         });
         m_bpChooserValidImprovements[improvementHash] = true;
     end
 
-    print("[BP_ResourcePlanter] Raising chooser with " .. tostring(#chooserEntries) .. " resource entries.")
+    print("[BP_ResourcePlanter] Raising chooser with " .. tostring(#chooserEntries) .. " mixed entries.")
     LuaEvents.BP_ResourceChooser_Open(chooserEntries);
 end
 
@@ -210,6 +402,9 @@ local function BPBuildCollapsedTooltip(actions:table)
 
     for _, action in ipairs(actions) do
         local _, improvementInfo = BPGetResourceInfoFromAction(action);
+        if improvementInfo == nil then
+            _, improvementInfo = BPGetFeatureInfoFromAction(action);
+        end
         if improvementInfo ~= nil then
             table.insert(lines, "[ICON_Bullet] " .. Locale.Lookup(improvementInfo.Name));
         end
@@ -232,15 +427,39 @@ local function BPCollectResourcePlantActions(buildActions:table, pUnit:table)
     local bpActions:table = {};
     local otherBuildActions:table = {};
     local player:table = nil;
+    local plot:table = nil;
 
     if pUnit ~= nil then
         player = Players[pUnit:GetOwner()];
+        plot = Map.GetPlot(pUnit:GetX(), pUnit:GetY());
     end
 
     for _, action in ipairs(buildActions) do
         if BPIsResourcePlantBuildAction(action) then
             local resourceInfo:table = BPGetResourceInfoFromAction(action);
-            if BPHasPlayerUnlockedResource(resourceInfo, player) then
+            local featureInfo:table = nil;
+            local isUnlocked:boolean = false;
+
+            if resourceInfo ~= nil then
+                isUnlocked = BPHasPlayerUnlockedResource(resourceInfo, player);
+                if resourceInfo ~= nil and isUnlocked then
+                    if plot ~= nil then
+                        -- 资源分支不允许覆盖已有资源；即便该资源因科技未解锁而地图上未显示，
+                        -- plot:GetResourceType() 仍会返回真实底层资源类型。
+                        -- 这里前置拦掉，避免玩家消耗建造者充能后才在 gameplay 侧被取消。
+                        if plot:GetResourceType() ~= -1 then
+                            isUnlocked = false;
+                        else
+                            isUnlocked = BPPlotMatchesResourcePlacementRules(plot, resourceInfo);
+                        end
+                    end
+                end
+            else
+                featureInfo = BPGetFeatureInfoFromAction(action);
+                isUnlocked = BPHasPlayerUnlockedFeature(featureInfo, player);
+            end
+
+            if isUnlocked then
                 table.insert(bpActions, action);
             end
         else
@@ -320,7 +539,25 @@ end
 
 local function BPOnChooserPlantSelected(improvementHash:number)
     if improvementHash ~= nil and m_bpChooserValidImprovements[improvementHash] then
-        print("[BP_ResourcePlanter] Chooser confirmed improvement hash " .. tostring(improvementHash) .. ".")
+        local targetKind:string, targetType:string, targetName:string = BPDescribeImprovementTarget(improvementHash)
+        local selectedUnit:table = UI.GetHeadSelectedUnit()
+        local selectedPlot:table = nil
+        local plotSummary:string = "plot=nil"
+        local unitOwner:number = -1
+        if selectedUnit ~= nil then
+            selectedPlot = Map.GetPlot(selectedUnit:GetX(), selectedUnit:GetY())
+            plotSummary = BPDescribeCurrentPlotForDebug(selectedPlot)
+            unitOwner = selectedUnit:GetOwner()
+        end
+        print(string.format(
+            "[BP_ResourcePlanter] Chooser confirmed target=%s targetType=%s targetName=%s unitOwner=%d %s hash=%s.",
+            tostring(targetKind),
+            tostring(targetType),
+            tostring(targetName),
+            unitOwner,
+            plotSummary,
+            tostring(improvementHash)
+        ))
         BPRequestPlantImprovement(improvementHash);
     else
         print("[BP_ResourcePlanter] Chooser ignored invalid improvement hash " .. tostring(improvementHash) .. ".")

@@ -147,6 +147,14 @@
       SliceTextureSize="24,24"
       StateOffsetIncrement="0,24">
       <Image ID="ResourceIcon" Anchor="L,C" Offset="18,0" Size="38,38"/>
+      <Label
+        ID="MissingIcon"
+        Anchor="L,C"
+        Offset="35,0"
+        Size="68,68"
+        Align="Center"
+        String="?"
+        Hidden="1"/>
       <Label ID="ResourceName" Anchor="L,C" Offset="70,0" Style="EventPopupDescription" TruncateWidth="420"/>
     </GridButton>
   </Instance>

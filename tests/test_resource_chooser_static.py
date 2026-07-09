@@ -8,6 +8,7 @@ main_sql = (ROOT / "BP_ResourcePlanter.sql").read_text(encoding="utf-8")
 main_lua = (ROOT / "BP_ResourcePlanter.lua").read_text(encoding="utf-8")
 text_sql = (ROOT / "BP_ResourcePlanter_Text.sql").read_text(encoding="utf-8")
 shared_lua = (ROOT / "UI" / "Replacements" / "BP_ResourcePlantUnitPanel_Shared.lua").read_text(encoding="utf-8")
+unitpanel_wrapper_lua = (ROOT / "UI" / "Replacements" / "UnitPanel_BP_All.lua").read_text(encoding="utf-8")
 chooser_xml = (ROOT / "UI" / "Additions" / "BPResourceChooser.xml").read_text(encoding="utf-8")
 chooser_lua = (ROOT / "UI" / "Additions" / "BPResourceChooser.lua").read_text(encoding="utf-8")
 
@@ -48,6 +49,17 @@ assert "<LoadOrder>" not in addui_block, (
 )
 assert "<Context>InGame</Context>" in addui_block, "<AddUserInterfaces> 段缺少 <Context>InGame</Context>"
 
+unitpanel_replace_start = modinfo.find('<ReplaceUIScript id="BP_Resource_UnitPanel_Replace">')
+unitpanel_replace_end = modinfo.find("</ReplaceUIScript>", unitpanel_replace_start)
+assert unitpanel_replace_start != -1 and unitpanel_replace_end != -1, (
+    "modinfo 缺少 BP_Resource_UnitPanel_Replace 段"
+)
+unitpanel_replace_block = modinfo[unitpanel_replace_start:unitpanel_replace_end]
+assert "<LoadOrder>200000</LoadOrder>" in unitpanel_replace_block, (
+    "BP_Resource_UnitPanel_Replace 的 LoadOrder 必须高于和而不同的 150000，"
+    "否则和而不同的 DL_UnitPanel.lua 会把资源选择器单入口覆盖回旧列表 UI。"
+)
+
 for tag in (
     "LOC_BP_RESOURCE_CHOOSER_TITLE",
     "LOC_BP_RESOURCE_CHOOSER_PROMPT",
@@ -58,6 +70,7 @@ for tag in (
     "LOC_BP_FILTER_BONUS",
     "LOC_BP_FILTER_LUXURY",
     "LOC_BP_FILTER_STRATEGIC",
+    "LOC_BP_FILTER_FEATURE",
     "LOC_BP_RESOURCE_CHOOSER_EMPTY_HINT",
 ):
     assert tag in text_sql, f"缺少本地化标签: {tag}"
@@ -89,6 +102,15 @@ assert "(R.Frequency > 0 OR R.SeaFrequency > 0)" in main_sql, (
     "排除不会随机生成的资源以避免引擎崩溃"
 )
 
+for needle in (
+    "BPBuildableFeatures",
+    "FEATURE_FOREST",
+    "FEATURE_JUNGLE",
+    "IMPROVEMENT_BP_' || REPLACE(BF.FeatureType, 'FEATURE_', 'FEATURE_')",
+    "'ICON_UNITOPERATION_PLANT_FOREST'",
+):
+    assert needle in main_sql, f"地貌种植 SQL 缺少关键逻辑: {needle}"
+
 # 资源可见性 / 资源类别 yield modifier 都走通用 wrapper，不再维护维多利亚专属补丁。
 for needle in (
     "BP_VISIBLE_RESOURCE_WRAPPER_REQ_",
@@ -105,23 +127,47 @@ for needle in (
     "BP_BONUS_RESOURCE_PROPERTY",
     "BP_LUXURY_RESOURCE_PROPERTY",
     "BP_STRATEGIC_RESOURCE_PROPERTY",
+    "BPBuildResourcePlacementRuleCache",
+    "BPPlotMatchesResourcePlacementRules",
+    "BPGetResourceDebugName",
+    "BPGetFeatureDebugName",
+    "BPDescribePlotForDebug",
     "BPSyncResourceYieldProperties",
     "BPSyncAllVisibleResourceYieldProperties",
+    "bpImprovementToFeature",
+    "TerrainBuilder.SetFeatureType",
+    "BPPlaceFeature",
+    "BPIsValidFeaturePlot",
+    'plot:GetResourceType() ~= resourceIndex',
 ):
     assert needle in main_lua, f"资源 yield property 同步缺少 Lua 关键逻辑: {needle}"
+
+assert '"DL_UnitPanel.lua"' in unitpanel_wrapper_lua, (
+    "UnitPanel_BP_All.lua 必须优先 include 和而不同的 DL_UnitPanel.lua，"
+    "这样本模组才能在其 UnitPanel 基础上叠加单入口选择器逻辑。"
+)
 
 for needle in (
     "BPCollectResourcePlantActions",
     "BPCreateResourceChooserAction",
     "BPShowResourceChooser",
+    "BPBuildResourcePlacementRuleCache",
+    "BPPlotMatchesResourcePlacementRules",
+    "BPDescribeImprovementTarget",
+    "BPDescribeCurrentPlotForDebug",
     "LuaEvents.BP_ResourceChooser_Open",
     "LuaEvents.BP_ResourceChooser_PlantSelected.Add",
     "BPHasPlayerUnlockedResource",
+    "BPGetFeatureInfoFromAction",
+    "BPHasPlayerUnlockedFeature",
     "playerTechs:HasTech",
     "playerCulture:HasCivic",
     'table.insert(actionsTable["SPECIFIC"], 1, chooserAction)',
-    # 资源分类字段必须转发给选择器,供 UI 端按 全部/加成/奢侈/战略 过滤
-    "ResourceClassType = resourceInfo and resourceInfo.ResourceClassType or nil",
+    "EntryKind = resourceInfo and 'RESOURCE' or 'FEATURE'",
+    "ResourceType = resourceInfo and resourceInfo.ResourceType or nil",
+    "FeatureType = featureInfo and featureInfo.FeatureType or nil",
+    "FilterKey = filterKey",
+    'Requesting BUILD_IMPROVEMENT target=',
 ):
     assert needle in shared_lua, f"替换脚本缺少关键逻辑: {needle}"
 
@@ -130,6 +176,7 @@ for needle in (
     'ID="ChooserScrollPanel"',
     'ID="ChooserListStack"',
     'Name="ResourceEntryInstance"',
+    'ID="MissingIcon"',
     # 官方模态弹窗骨架的必备元素(FullScreenVignetteConsumer 暗化背景 +
     # BoxButton ScreenConsumer 吞世界点击/滚轮 / 右键关闭)。
     'FullScreenVignetteConsumer',
@@ -207,7 +254,16 @@ assert 'Offset="0,-' not in cancel_button_tag, (
 for needle in (
     "LuaEvents.BP_ResourceChooser_Open.Add",
     "LuaEvents.BP_ResourceChooser_PlantSelected",
-    'instance.ResourceIcon:SetTexture',
+    'iconControl:SetTexture',
+    "ResolveEntryIcon",
+    "TrySetIconFromId",
+    "for _, iconSize in ipairs({38, 32, 50, 22, 64, 80, 256}) do",
+    'candidateIds[#candidateIds + 1] = entry.ResourceType',
+    'candidateIds[#candidateIds + 1] = "ICON_" .. entry.ResourceType',
+    'instance.ResourceIcon:SetHide(true)',
+    'instance.MissingIcon:SetHide(false)',
+    'instance.ResourceIcon:SetHide(false)',
+    'instance.MissingIcon:SetHide(true)',
     # 官方弹窗模式必备:Queue/Dequeue + PopupPriority.Low + SetInputHandler + SetInitHandler
     "UIManager:QueuePopup(ContextPtr, PopupPriority.Low",
     "UIManager:DequeuePopup(ContextPtr)",
@@ -218,6 +274,7 @@ for needle in (
     'include("TabSupport")',
     "FILTER_ALL",
     "ClassTypeToFilterKey",
+    "FILTER_FEATURE",
     "AddFilterTab",
     "RefreshList",
     "m_kTabs.SelectTab",
@@ -225,6 +282,7 @@ for needle in (
     "LOC_BP_FILTER_BONUS",
     "LOC_BP_FILTER_LUXURY",
     "LOC_BP_FILTER_STRATEGIC",
+    "LOC_BP_FILTER_FEATURE",
 ):
     assert needle in chooser_lua, f"选择器 Lua 缺少关键逻辑: {needle}"
 

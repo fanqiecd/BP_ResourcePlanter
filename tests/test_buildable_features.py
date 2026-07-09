@@ -10,27 +10,19 @@ SQL_PATH = REPO_ROOT / "BP_ResourcePlanter.sql"
 BASE_DATA_DIR = Path(
     r"D:\Program Files (x86)\Steam\steamapps\common\Sid Meier's Civilization VI\Base\Assets\Gameplay\Data"
 )
-FEATURE_ONLY_LAND_RESOURCES = (
-    "BANANAS",
-    "COCOA",
-    "DYES",
-    "SILK",
-    "SPICES",
-    "SUGAR",
-    "TRUFFLES",
-)
-SEA_TERRAINS = {"TERRAIN_COAST", "TERRAIN_OCEAN"}
-ALL_LAND_TERRAINS = {
-    "TERRAIN_GRASS",
-    "TERRAIN_PLAINS",
-    "TERRAIN_DESERT",
-    "TERRAIN_TUNDRA",
-    "TERRAIN_SNOW",
-    "TERRAIN_GRASS_HILLS",
-    "TERRAIN_PLAINS_HILLS",
-    "TERRAIN_DESERT_HILLS",
-    "TERRAIN_TUNDRA_HILLS",
-    "TERRAIN_SNOW_HILLS",
+TARGET_FEATURES = {
+    "FEATURE_FOREST": {
+        "icon": "ICON_UNITOPERATION_PLANT_FOREST",
+        "tech": None,
+        "civic": None,
+        "improvement": "IMPROVEMENT_BP_FEATURE_FOREST",
+    },
+    "FEATURE_JUNGLE": {
+        "icon": "ICON_UNITOPERATION_PLANT_FOREST",
+        "tech": None,
+        "civic": None,
+        "improvement": "IMPROVEMENT_BP_FEATURE_JUNGLE",
+    },
 }
 
 
@@ -103,7 +95,7 @@ def build_minimal_schema(connection: sqlite3.Connection) -> None:
     )
 
 
-def seed_base_resource_data(connection: sqlite3.Connection) -> None:
+def seed_base_data(connection: sqlite3.Connection) -> None:
     resources_root = ET.parse(BASE_DATA_DIR / "Resources.xml").getroot()
     for row in resources_root.findall(".//Resources/Row"):
         values = parse_row_values(row)
@@ -172,33 +164,38 @@ def fetch_set(connection: sqlite3.Connection, query: str, params: tuple[str, ...
 def main() -> None:
     connection = sqlite3.connect(":memory:")
     build_minimal_schema(connection)
-    seed_base_resource_data(connection)
+    seed_base_data(connection)
     connection.executescript(load_sql_setup())
-    expected_land_features = fetch_set(
-        connection,
+
+    rows = connection.execute(
         """
-        SELECT FeatureType
-        FROM BPValidFeatures
-        WHERE Domain = 'DOMAIN_LAND'
-        """,
-        (),
-    )
+        SELECT FeatureType, Icon, PrereqTech, PrereqCivic
+        FROM BPBuildableFeatures
+        ORDER BY FeatureType
+        """
+    ).fetchall()
+    assert len(rows) == 2, f"BPBuildableFeatures 应仅包含森林/雨林，实际为: {rows}"
 
-    expected_land_domains = set(
-        connection.execute(
-            f"""
-            SELECT ResourceName
-            FROM BPBuildableResources
-            WHERE ResourceName IN ({",".join("?" for _ in FEATURE_ONLY_LAND_RESOURCES)})
-              AND Domain = 'DOMAIN_LAND'
+    for feature_type, icon, prereq_tech, prereq_civic in rows:
+        expected = TARGET_FEATURES[feature_type]
+        assert icon == expected["icon"], f"{feature_type} 图标错误: {icon}"
+        assert prereq_tech == expected["tech"], f"{feature_type} 科技前置错误: {prereq_tech}"
+        assert prereq_civic == expected["civic"], f"{feature_type} 市政前置错误: {prereq_civic}"
+
+    for feature_type, expected in TARGET_FEATURES.items():
+        improvement_type = expected["improvement"]
+        improvement_row = connection.execute(
+            """
+            SELECT Icon, Domain
+            FROM Improvements
+            WHERE ImprovementType = ?
             """,
-            FEATURE_ONLY_LAND_RESOURCES,
-        ).fetchall()
-    )
-    expected_land_domains = {row[0] for row in expected_land_domains}
-    assert expected_land_domains == set(FEATURE_ONLY_LAND_RESOURCES)
+            (improvement_type,),
+        ).fetchone()
+        assert improvement_row is not None, f"缺少地貌占位改良: {improvement_type}"
+        assert improvement_row[0] == expected["icon"], f"{improvement_type} 图标错误: {improvement_row[0]}"
+        assert improvement_row[1] == "DOMAIN_LAND", f"{improvement_type} 应为陆地改良: {improvement_row[1]}"
 
-    for resource_name in FEATURE_ONLY_LAND_RESOURCES:
         terrains = fetch_set(
             connection,
             """
@@ -206,66 +203,33 @@ def main() -> None:
             FROM Improvement_ValidTerrains
             WHERE ImprovementType = ?
             """,
-            (f"IMPROVEMENT_BP_{resource_name}",),
+            (improvement_type,),
         )
-        assert terrains, f"{resource_name} 未生成合法地形"
-        assert terrains == ALL_LAND_TERRAINS, f"{resource_name} 应放开为全部陆地地形: {terrains}"
-
-    assert fetch_set(
-        connection,
-        """
-        SELECT TerrainType
-        FROM Improvement_ValidTerrains
-        WHERE ImprovementType = 'IMPROVEMENT_BP_BANANAS'
-        """,
-        (),
-    ) == ALL_LAND_TERRAINS
-
-    for resource_name in FEATURE_ONLY_LAND_RESOURCES:
-        features = fetch_set(
+        expected_terrains = fetch_set(
             connection,
             """
-            SELECT FeatureType
-            FROM Improvement_ValidFeatures
+            SELECT TerrainType
+            FROM Feature_ValidTerrains
+            WHERE FeatureType = ?
+            """,
+            (feature_type,),
+        )
+        assert terrains == expected_terrains, (
+            f"{improvement_type} 合法地形应与 {feature_type} 一致: {terrains} != {expected_terrains}"
+        )
+
+        build_units = fetch_set(
+            connection,
+            """
+            SELECT UnitType
+            FROM Improvement_ValidBuildUnits
             WHERE ImprovementType = ?
             """,
-            (f"IMPROVEMENT_BP_{resource_name}",),
+            (improvement_type,),
         )
-        assert features == expected_land_features, f"{resource_name} 应放开为全部陆地地貌: {features}"
+        assert build_units == {"UNIT_BUILDER"}, f"{improvement_type} 应仅允许建造者建造: {build_units}"
 
-    assert fetch_set(
-        connection,
-        """
-        SELECT TerrainType
-        FROM Improvement_ValidTerrains
-        WHERE ImprovementType = 'IMPROVEMENT_BP_COCOA'
-        """,
-        (),
-    ) == ALL_LAND_TERRAINS
-
-    assert fetch_set(
-        connection,
-        """
-        SELECT TerrainType
-        FROM Improvement_ValidTerrains
-        WHERE ImprovementType = 'IMPROVEMENT_BP_SUGAR'
-        """,
-        (),
-    ) == ALL_LAND_TERRAINS
-
-    pearls_terrains = fetch_set(
-        connection,
-        """
-        SELECT TerrainType
-        FROM Improvement_ValidTerrains
-        WHERE ImprovementType = 'IMPROVEMENT_BP_PEARLS'
-        """,
-        (),
-    )
-    assert pearls_terrains
-    assert pearls_terrains.issubset(SEA_TERRAINS), f"海洋资源 PEARLS 被拖到陆地: {pearls_terrains}"
-
-    print("feature-only resource terrain self-check passed")
+    print("buildable feature self-check passed")
 
 
 if __name__ == "__main__":

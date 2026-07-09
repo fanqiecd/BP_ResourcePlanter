@@ -19,18 +19,22 @@
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
--- 建立查找表：占位改良索引 -> 资源索引
--- 改良名称格式为 'IMPROVEMENT_BP_<ResourceName>'，其中 <ResourceName> 是去掉
--- 'RESOURCE_' 前缀后的资源名。脚本初始化时从 GameInfo 反推这层映射，避免在 Lua
--- 里写死资源名单。
+-- 建立查找表：占位改良索引 -> 资源索引 / 地貌索引
+-- 资源改良名称格式为 'IMPROVEMENT_BP_<ResourceName>'，其中 <ResourceName> 是去掉
+-- 'RESOURCE_' 前缀后的资源名。
+-- 地貌改良名称格式为 'IMPROVEMENT_BP_<FeatureType>'，例如
+-- 'IMPROVEMENT_BP_FEATURE_FOREST'。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 local bpImprovementToResource = {}      -- [improvementIndex] = resourceIndex
+local bpImprovementToFeature = {}       -- [improvementIndex] = featureIndex
 local bpTrackedImprovementIndexes = {}  -- 快速判断“这个改良是不是本模组的”
 local bpConvertingPlots = {}            -- 以地块索引为键的防重入保护
 local BP_VISIBLE_RESOURCE_PROPERTY = 'BP_VisibleResourceForYieldBonuses'
 local BP_BONUS_RESOURCE_PROPERTY = 'BP_HasBonusResourceForYieldBonuses'
 local BP_LUXURY_RESOURCE_PROPERTY = 'BP_HasLuxuryResourceForYieldBonuses'
 local BP_STRATEGIC_RESOURCE_PROPERTY = 'BP_HasStrategicResourceForYieldBonuses'
+local bpResourceValidTerrainsByType = nil
+local bpResourceValidFeaturesByType = nil
 
 local function BPInitLookup()
     -- GameInfo.Resources() 会遍历 Resources 表中的每一行。
@@ -48,14 +52,150 @@ local function BPInitLookup()
             end
         end
     end
-    local count = 0
-    for _ in pairs(bpImprovementToResource) do count = count + 1 end
-    print(string.format('[BP_ResourcePlanter] Tracked %d resource-planting improvements.', count))
+
+    for featureInfo in GameInfo.Features() do
+        local featureType = featureInfo.FeatureType
+        if featureType == 'FEATURE_FOREST' or featureType == 'FEATURE_JUNGLE' then
+            local improvementType = 'IMPROVEMENT_BP_'..featureType
+            local improvementInfo = GameInfo.Improvements[improvementType]
+            if improvementInfo then
+                local improvementIndex = improvementInfo.Index
+                local featureIndex = featureInfo.Index
+                bpImprovementToFeature[improvementIndex] = featureIndex
+                bpTrackedImprovementIndexes[improvementIndex] = true
+            end
+        end
+    end
+
+    local resourceCount = 0
+    local featureCount = 0
+    for _ in pairs(bpImprovementToResource) do resourceCount = resourceCount + 1 end
+    for _ in pairs(bpImprovementToFeature) do featureCount = featureCount + 1 end
+    print(string.format(
+        '[BP_ResourcePlanter] Tracked %d resource improvements and %d feature improvements.',
+        resourceCount,
+        featureCount
+    ))
 end
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -- 辅助函数
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+local function BPBuildResourcePlacementRuleCache()
+    if bpResourceValidTerrainsByType ~= nil and bpResourceValidFeaturesByType ~= nil then
+        return
+    end
+
+    bpResourceValidTerrainsByType = {}
+    bpResourceValidFeaturesByType = {}
+
+    for row in GameInfo.Resource_ValidTerrains() do
+        if row.ResourceType ~= nil and row.TerrainType ~= nil then
+            if bpResourceValidTerrainsByType[row.ResourceType] == nil then
+                bpResourceValidTerrainsByType[row.ResourceType] = {}
+            end
+            bpResourceValidTerrainsByType[row.ResourceType][row.TerrainType] = true
+        end
+    end
+
+    for row in GameInfo.Resource_ValidFeatures() do
+        if row.ResourceType ~= nil and row.FeatureType ~= nil then
+            if bpResourceValidFeaturesByType[row.ResourceType] == nil then
+                bpResourceValidFeaturesByType[row.ResourceType] = {}
+            end
+            bpResourceValidFeaturesByType[row.ResourceType][row.FeatureType] = true
+        end
+    end
+end
+
+local function BPGetPlotTerrainType(plot)
+    if plot == nil then
+        return nil
+    end
+
+    local terrainIndex = plot:GetTerrainType()
+    if terrainIndex == nil or terrainIndex < 0 then
+        return nil
+    end
+
+    local terrainInfo = GameInfo.Terrains[terrainIndex]
+    return terrainInfo and terrainInfo.TerrainType or nil
+end
+
+local function BPGetPlotFeatureType(plot)
+    if plot == nil then
+        return nil
+    end
+
+    local featureIndex = plot:GetFeatureType()
+    if featureIndex == nil or featureIndex < 0 then
+        return nil
+    end
+
+    local featureInfo = GameInfo.Features[featureIndex]
+    return featureInfo and featureInfo.FeatureType or nil
+end
+
+local function BPGetResourceDebugName(resourceIndex)
+    if resourceIndex == nil or resourceIndex < 0 then
+        return "NONE", "None"
+    end
+
+    local resourceInfo = GameInfo.Resources[resourceIndex]
+    if resourceInfo == nil then
+        return tostring(resourceIndex), tostring(resourceIndex)
+    end
+
+    return resourceInfo.ResourceType or tostring(resourceIndex), Locale.Lookup(resourceInfo.Name)
+end
+
+local function BPGetFeatureDebugName(featureIndex)
+    if featureIndex == nil or featureIndex < 0 then
+        return "NONE", "None"
+    end
+
+    local featureInfo = GameInfo.Features[featureIndex]
+    if featureInfo == nil then
+        return tostring(featureIndex), tostring(featureIndex)
+    end
+
+    return featureInfo.FeatureType or tostring(featureIndex), Locale.Lookup(featureInfo.Name)
+end
+
+local function BPDescribePlotForDebug(plot)
+    if plot == nil then
+        return "plot=nil"
+    end
+
+    local terrainType = BPGetPlotTerrainType(plot) or "NONE"
+    local featureType, featureName = BPGetFeatureDebugName(plot:GetFeatureType())
+    local resourceType, resourceName = BPGetResourceDebugName(plot:GetResourceType())
+
+    return string.format(
+        "plot=(%d,%d) terrain=%s feature=%s(%s) resource=%s(%s) owner=%s district=%s improvement=%s",
+        plot:GetX(),
+        plot:GetY(),
+        tostring(terrainType),
+        tostring(featureType),
+        tostring(featureName),
+        tostring(resourceType),
+        tostring(resourceName),
+        tostring(plot:GetOwner()),
+        tostring(plot:GetDistrictType()),
+        tostring(plot:GetImprovementType())
+    )
+end
+
+local function BPPlotMatchesResourcePlacementRules(plot, resourceInfo)
+    if plot == nil or resourceInfo == nil or resourceInfo.ResourceType == nil then
+        return false
+    end
+
+    -- 资源种植已取消具体地形 / 地貌限制；这里只保留对象有效性，让 gameplay 继续
+    -- 依赖已有资源、奇观、区域、所有权等基础限制。
+    return true
+end
+
 local function BPClearImprovement(plot)
     ImprovementBuilder.SetImprovementType(plot, -1, -1)
 end
@@ -95,7 +235,7 @@ local function BPSyncResourceYieldProperties(plot, resourceIndexOverride)
     plot:SetProperty(BP_STRATEGIC_RESOURCE_PROPERTY, strategicProperty)
 end
 
-local function BPIsValidPlot(plot, player)
+local function BPIsCommonPlotValid(plot, player)
     if plot == nil then return false end
 
     -- 直接排除自然奇观。Features.NaturalWonder 在 SQLite 里存的是 0/1 整数，
@@ -106,11 +246,6 @@ local function BPIsValidPlot(plot, player)
         if featureInfo and featureInfo.NaturalWonder and featureInfo.NaturalWonder ~= 0 then
             return false
         end
-    end
-
-    -- 排除任何已经带资源的格子：防止重复种植或覆盖原资源。
-    if plot:GetResourceType() ~= -1 then
-        return false
     end
 
     -- 排除已有区域的格子（城市中心、社区等）。
@@ -133,7 +268,33 @@ local function BPIsValidPlot(plot, player)
     return true
 end
 
-local function BPPlaceResource(plot, resourceIndex, actingPlayerIndex)
+local function BPIsValidResourcePlot(plot, player)
+    if not BPIsCommonPlotValid(plot, player) then
+        return false
+    end
+
+    -- 资源种植仍然禁止覆盖现有资源。
+    if plot:GetResourceType() ~= -1 then
+        return false
+    end
+
+    return true
+end
+
+local function BPIsValidFeaturePlot(plot, player)
+    if not BPIsCommonPlotValid(plot, player) then
+        return false
+    end
+
+    -- 地貌种植允许与已有资源共存，但不允许和现有地貌叠加。
+    if plot:GetFeatureType() ~= -1 then
+        return false
+    end
+
+    return true
+end
+
+local function BPPlaceResource(plot, resourceIndex)
     -- 最终状态约束：格子上只留下资源本身。触发本事件的占位改良会在同一次调用里
     -- 被移除，因此玩家不会看到一个完成态“改良设施”压在资源上。
     --
@@ -148,6 +309,19 @@ local function BPPlaceResource(plot, resourceIndex, actingPlayerIndex)
     -- 引擎可能要等到下一回合才重新评估这类“资源可见性”地块加成。
     BPSyncResourceYieldProperties(plot, resourceIndex)
     ResourceBuilder.SetResourceType(plot, resourceIndex, 1)
+    if plot:GetResourceType() ~= resourceIndex then
+        BPSyncResourceYieldProperties(plot)
+        BPClearImprovement(plot)
+        return false
+    end
+    BPSyncResourceYieldProperties(plot)
+    BPClearImprovement(plot)
+    return true
+end
+
+local function BPPlaceFeature(plot, featureIndex)
+    BPClearImprovement(plot)
+    TerrainBuilder.SetFeatureType(plot, featureIndex)
     BPSyncResourceYieldProperties(plot)
     BPClearImprovement(plot)
 end
@@ -195,29 +369,115 @@ local function BPOnImprovementAddedToMap(x, y, improvementIndex, playerID)
         return
     end
 
-    -- 校验地块。如果不合法，就回滚占位改良，避免玩家看到与现有内容重叠的假占位物。
-    if not BPIsValidPlot(plot, playerID) then
-        BPClearImprovement(plot)
-        BPSyncResourceYieldProperties(plot)
-        print('[BP_ResourcePlanter] Conversion canceled: plot ('..x..','..y..') is not eligible (already has resource / wonder / foreign territory).')
+    local resourceIndex = bpImprovementToResource[improvementIndex]
+    if resourceIndex ~= nil then
+        local resourceInfo = GameInfo.Resources[resourceIndex]
+        local resourceType, resourceName = BPGetResourceDebugName(resourceIndex)
+        print(string.format(
+            '[BP_ResourcePlanter] Attempting resource conversion target=%s(%s) player=%d improvementIndex=%s %s.',
+            tostring(resourceType),
+            tostring(resourceName),
+            playerID,
+            tostring(improvementIndex),
+            BPDescribePlotForDebug(plot)
+        ))
+
+        if not BPIsValidResourcePlot(plot, playerID) then
+            BPClearImprovement(plot)
+            BPSyncResourceYieldProperties(plot)
+            print(string.format(
+                '[BP_ResourcePlanter] Resource conversion canceled: target=%s(%s) player=%d not eligible %s.',
+                tostring(resourceType),
+                tostring(resourceName),
+                playerID,
+                BPDescribePlotForDebug(plot)
+            ))
+            bpConvertingPlots[plotKey] = nil
+            return
+        end
+
+        if not BPPlotMatchesResourcePlacementRules(plot, resourceInfo) then
+            BPClearImprovement(plot)
+            BPSyncResourceYieldProperties(plot)
+            print(string.format(
+                '[BP_ResourcePlanter] Resource conversion canceled: target=%s(%s) does not match plot rules player=%d %s.',
+                tostring(resourceType),
+                tostring(resourceName),
+                playerID,
+                BPDescribePlotForDebug(plot)
+            ))
+            bpConvertingPlots[plotKey] = nil
+            return
+        end
+
+        local placementSucceeded = BPPlaceResource(plot, resourceIndex)
+        if not placementSucceeded then
+            print(string.format(
+                '[BP_ResourcePlanter] Resource conversion failed: target=%s(%s) player=%d %s.',
+                tostring(resourceType),
+                tostring(resourceName),
+                playerID,
+                BPDescribePlotForDebug(plot)
+            ))
+            bpConvertingPlots[plotKey] = nil
+            return
+        end
+
+        print(string.format(
+            '[BP_ResourcePlanter] Resource planted target=%s(%s) player=%d %s.',
+            tostring(resourceType),
+            tostring(resourceName),
+            playerID,
+            BPDescribePlotForDebug(plot)
+        ))
         bpConvertingPlots[plotKey] = nil
         return
     end
 
-    local resourceIndex = bpImprovementToResource[improvementIndex]
-    if resourceIndex == nil then
+    local featureIndex = bpImprovementToFeature[improvementIndex]
+    if featureIndex ~= nil then
+        local featureType, featureName = BPGetFeatureDebugName(featureIndex)
+        print(string.format(
+            '[BP_ResourcePlanter] Attempting feature conversion target=%s(%s) player=%d improvementIndex=%s %s.',
+            tostring(featureType),
+            tostring(featureName),
+            playerID,
+            tostring(improvementIndex),
+            BPDescribePlotForDebug(plot)
+        ))
+        if not BPIsValidFeaturePlot(plot, playerID) then
+            BPClearImprovement(plot)
+            BPSyncResourceYieldProperties(plot)
+            print(string.format(
+                '[BP_ResourcePlanter] Feature conversion canceled: target=%s(%s) player=%d not eligible %s.',
+                tostring(featureType),
+                tostring(featureName),
+                playerID,
+                BPDescribePlotForDebug(plot)
+            ))
+            bpConvertingPlots[plotKey] = nil
+            return
+        end
+
+        BPPlaceFeature(plot, featureIndex)
+        print(string.format(
+            '[BP_ResourcePlanter] Feature planted target=%s(%s) player=%d %s.',
+            tostring(featureType),
+            tostring(featureName),
+            playerID,
+            BPDescribePlotForDebug(plot)
+        ))
+        bpConvertingPlots[plotKey] = nil
+        return
+    end
+
+    if resourceIndex == nil and featureIndex == nil then
         BPClearImprovement(plot)
         BPSyncResourceYieldProperties(plot)
         print('[BP_ResourcePlanter] Conversion canceled: no resource mapping for improvement index '..tostring(improvementIndex)..'.')
         bpConvertingPlots[plotKey] = nil
         return
     end
-
-    local resourceName = Locale.Lookup(GameInfo.Resources[resourceIndex].Name)
-    BPPlaceResource(plot, resourceIndex, playerID)
-    print(string.format('[BP_ResourcePlanter] Planted %s at (%d,%d) for player %d.',
-        resourceName, x, y, playerID))
-    bpConvertingPlots[plotKey] = nil
 end
 
 local function BPSyncAllVisibleResourceYieldProperties()
@@ -244,7 +504,13 @@ local function BPSanitizeExistingDummyImprovements()
         if plot ~= nil then
             local improvementIndex = plot:GetImprovementType()
             if improvementIndex ~= -1 and bpTrackedImprovementIndexes[improvementIndex] then
-                if plot:GetResourceType() ~= -1 then
+                local resourceIndex = bpImprovementToResource[improvementIndex]
+                local featureIndex = bpImprovementToFeature[improvementIndex]
+                local plotResourceIndex = plot:GetResourceType()
+                local plotFeatureIndex = plot:GetFeatureType()
+
+                if (resourceIndex ~= nil and plotResourceIndex == resourceIndex)
+                    or (featureIndex ~= nil and plotFeatureIndex == featureIndex) then
                     BPClearImprovement(plot)
                     cleanedCount = cleanedCount + 1
                 else

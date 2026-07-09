@@ -24,7 +24,11 @@
 --   ImprovementHash    -- 用于回传的占位改良 hash
 --   Name               -- 本地化资源名
 --   IconId             -- 资源图标
+--   ResourceType       -- 资源项时为 "RESOURCE_*"，供 UI 端按别名兜底找图
 --   ResourceClassType  -- "RESOURCECLASS_BONUS"/"LUXURY"/"STRATEGIC" 或 nil
+--   EntryKind          -- "RESOURCE" 或 "FEATURE"
+--   FeatureType        -- 地貌项时为 "FEATURE_FOREST"/"FEATURE_JUNGLE"
+--   FilterKey          -- "BONUS"/"LUXURY"/"STRATEGIC"/"FEATURE"
 -- ===========================================================================
 include("InstanceManager");
 include("TabSupport");
@@ -40,7 +44,7 @@ local FILTER_ALL:string       = "ALL";
 local FILTER_BONUS:string      = "BONUS";
 local FILTER_LUXURY:string     = "LUXURY";
 local FILTER_STRATEGIC:string  = "STRATEGIC";
-
+local FILTER_FEATURE:string    = "FEATURE";
 -- 把官方 ResourceClassType 长名映射成简短过滤键,便于在 Lua 里按用户选择筛。
 local function ClassTypeToFilterKey(classType)
     if classType == "RESOURCECLASS_BONUS" then
@@ -50,6 +54,66 @@ local function ClassTypeToFilterKey(classType)
     elseif classType == "RESOURCECLASS_STRATEGIC" then
         return FILTER_STRATEGIC;
     end
+    return nil;
+end
+
+local function EntryToFilterKey(entry:table)
+    if entry == nil then
+        return nil;
+    end
+
+    if entry.FilterKey ~= nil then
+        return entry.FilterKey;
+    end
+
+    return ClassTypeToFilterKey(entry.ResourceClassType);
+end
+
+local function TrySetIconFromId(iconControl:table, iconId:string)
+    if iconControl == nil or iconId == nil or iconId == "" then
+        return false;
+    end
+
+    for _, iconSize in ipairs({38, 32, 50, 22, 64, 80, 256}) do
+        local textureOffsetX:number, textureOffsetY:number, textureSheet:string = IconManager:FindIconAtlas(iconId, iconSize);
+        if textureSheet ~= nil then
+            iconControl:SetTexture(textureOffsetX, textureOffsetY, textureSheet);
+            return true;
+        end
+    end
+
+    return false;
+end
+
+local function ResolveEntryIcon(iconControl:table, entry:table)
+    local candidateIds:table = {};
+    local seen:table = {};
+
+    local function AddCandidate(iconId:string)
+        if iconId ~= nil and iconId ~= "" and not seen[iconId] then
+            seen[iconId] = true;
+            candidateIds[#candidateIds + 1] = iconId;
+        end
+    end
+
+    AddCandidate(entry and entry.IconId or nil);
+
+    if entry ~= nil and entry.ResourceType ~= nil then
+        candidateIds[#candidateIds + 1] = entry.ResourceType;
+        candidateIds[#candidateIds + 1] = "ICON_" .. entry.ResourceType;
+    end
+
+    if entry ~= nil and entry.FeatureType ~= nil then
+        AddCandidate("ICON_" .. entry.FeatureType);
+        AddCandidate(entry.FeatureType);
+    end
+
+    for _, iconId in ipairs(candidateIds) do
+        if TrySetIconFromId(iconControl, iconId) then
+            return iconId;
+        end
+    end
+
     return nil;
 end
 
@@ -92,7 +156,7 @@ function RefreshList()
         if m_currentFilter == FILTER_ALL then
             table.insert(visible, entry);
         else
-            if ClassTypeToFilterKey(entry.ResourceClassType) == m_currentFilter then
+            if EntryToFilterKey(entry) == m_currentFilter then
                 table.insert(visible, entry);
             end
         end
@@ -110,9 +174,20 @@ function RefreshList()
         for _, entry in ipairs(visible) do
             local instance:table = m_resourceEntryIM:GetInstance();
             if instance ~= nil then
-                local textureOffsetX:number, textureOffsetY:number, textureSheet:string = IconManager:FindIconAtlas(entry.IconId, 38);
-                if textureSheet ~= nil then
-                    instance.ResourceIcon:SetTexture(textureOffsetX, textureOffsetY, textureSheet);
+                local resolvedIconId:string = ResolveEntryIcon(instance.ResourceIcon, entry);
+                if resolvedIconId == nil then
+                    instance.ResourceIcon:SetHide(true);
+                    instance.MissingIcon:SetHide(false);
+                    print(string.format(
+                        "[BP_ResourcePlanter] BPResourceChooser icon lookup failed for %s (IconId=%s, ResourceType=%s, FeatureType=%s).",
+                        tostring(entry.Name),
+                        tostring(entry.IconId),
+                        tostring(entry.ResourceType),
+                        tostring(entry.FeatureType)
+                    ));
+                else
+                    instance.ResourceIcon:SetHide(false);
+                    instance.MissingIcon:SetHide(true);
                 end
                 instance.ResourceName:SetText(entry.Name);
                 instance.Button:SetToolTipString(entry.Name);
@@ -238,6 +313,7 @@ local function OnInit()
     AddFilterTab("LOC_BP_FILTER_BONUS",    FILTER_BONUS);
     AddFilterTab("LOC_BP_FILTER_LUXURY",   FILTER_LUXURY);
     AddFilterTab("LOC_BP_FILTER_STRATEGIC", FILTER_STRATEGIC);
+    AddFilterTab("LOC_BP_FILTER_FEATURE",  FILTER_FEATURE);
 
     -- 让 4 个标签等宽并居中排开(参 ReportScreen.lua:1781-1783)。
     m_kTabs.SameSizedTabs(20);
