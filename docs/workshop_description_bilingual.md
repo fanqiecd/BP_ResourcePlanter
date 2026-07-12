@@ -37,7 +37,7 @@
 [list]
 [*]这是“种植资源 / 地貌”，不是自动附带矿井、农场、种植园、牧场、渔船等开发改良
 [*]若地块底层本来就有一个尚未因科技解锁而显示出来的资源，资源种植入口会被隐藏，避免白白消耗建造者充能
-[*]已兼容“和而不同”等大型 UnitPanel 替换模组的单入口资源按钮方案
+[*]本模组不替换 UnitPanel，可直接兼容 Builder Lag Fix、“和而不同”及其他建造者面板模组
 [*]资源列表会自动读取 Resources 表，通常可兼容遵循标准定义的 DLC 与大多数资源模组
 [*]若第三方资源模组使用了非常规定义，可能需要单独适配
 [/list]
@@ -80,7 +80,7 @@ Each plantable entry first places a hidden placeholder improvement, then immedia
 [list]
 [*]This mod plants resources / features, but does not automatically add Mines, Farms, Plantations, Camps, Fishing Boats, or other improvements
 [*]If a tile already contains a hidden resource that is not revealed yet by your current tech, the resource planting entry stays hidden to avoid wasting Builder charges
-[*]The single-entry resource button is already adapted for large UnitPanel replacement mods such as Harmony in Diversity / DL
+[*]This mod does not replace UnitPanel, so it works alongside Builder Lag Fix, Harmony in Diversity / DL, and other Builder panel mods
 [*]The resource list is data-driven from the Resources table, so it usually works with DLC and most resource mods that follow standard definitions
 [*]Some heavily customized third-party resource mods may still need manual compatibility work
 [/list]
