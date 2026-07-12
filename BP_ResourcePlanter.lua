@@ -1,8 +1,8 @@
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -- Builder Plants Resources  -  Gameplay 脚本
 --
--- 当建造者建成任意一个占位改良（'IMPROVEMENT_BP_<ResourceName>'）时，
--- 把它原地转换成对应的真实资源。
+-- 独立 UI 通过 EXECUTE_SCRIPT 请求本脚本直接种植资源 / 地貌，并用不可见
+-- UnitAbility 正确消耗一次建造者充能。旧占位改良路径仅用于清理旧存档残留。
 --
 -- 整体思路沿用上游 "Settlers Build Districts" 模组：
 --   * 监听 ImprovementsAddedToMap（人类 / AI、读档 / 游玩过程中都会触发），
@@ -18,6 +18,8 @@
 -- 就要删掉，所以直接把改良设为 -1，再设置资源即可。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+ExposedMembers.GameEvents = GameEvents
+
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -- 建立查找表：占位改良索引 -> 资源索引 / 地貌索引
 -- 资源改良名称格式为 'IMPROVEMENT_BP_<ResourceName>'，其中 <ResourceName> 是去掉
@@ -29,14 +31,34 @@ local bpImprovementToResource = {}      -- [improvementIndex] = resourceIndex
 local bpImprovementToFeature = {}       -- [improvementIndex] = featureIndex
 local bpTrackedImprovementIndexes = {}  -- 快速判断“这个改良是不是本模组的”
 local bpConvertingPlots = {}            -- 以地块索引为键的防重入保护
+local bpBuildableResourceDomains = {}   -- [resourceIndex] = DOMAIN_LAND / DOMAIN_SEA
+local bpBuildableFeatureDomains = {}    -- [featureIndex] = DOMAIN_LAND / DOMAIN_SEA
+local bpBuilderUnitTypes = {}            -- [UnitType] = true
 local BP_VISIBLE_RESOURCE_PROPERTY = 'BP_VisibleResourceForYieldBonuses'
 local BP_BONUS_RESOURCE_PROPERTY = 'BP_HasBonusResourceForYieldBonuses'
 local BP_LUXURY_RESOURCE_PROPERTY = 'BP_HasLuxuryResourceForYieldBonuses'
 local BP_STRATEGIC_RESOURCE_PROPERTY = 'BP_HasStrategicResourceForYieldBonuses'
-local bpResourceValidTerrainsByType = nil
-local bpResourceValidFeaturesByType = nil
-
 local function BPInitLookup()
+    for row in GameInfo.TypeTags() do
+        if row.Tag == 'CLASS_BUILDER' then
+            bpBuilderUnitTypes[row.Type] = true
+        end
+    end
+
+    for row in GameInfo.BPBuildableResources() do
+        local resourceInfo = GameInfo.Resources['RESOURCE_'..row.ResourceName]
+        if resourceInfo ~= nil then
+            bpBuildableResourceDomains[resourceInfo.Index] = row.Domain
+        end
+    end
+
+    for row in GameInfo.BPBuildableFeatures() do
+        local featureInfo = GameInfo.Features[row.FeatureType]
+        if featureInfo ~= nil then
+            bpBuildableFeatureDomains[featureInfo.Index] = row.Domain
+        end
+    end
+
     -- GameInfo.Resources() 会遍历 Resources 表中的每一行。
     for resourceInfo in GameInfo.Resources() do
         local resourceType = resourceInfo.ResourceType
@@ -81,33 +103,6 @@ end
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -- 辅助函数
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-local function BPBuildResourcePlacementRuleCache()
-    if bpResourceValidTerrainsByType ~= nil and bpResourceValidFeaturesByType ~= nil then
-        return
-    end
-
-    bpResourceValidTerrainsByType = {}
-    bpResourceValidFeaturesByType = {}
-
-    for row in GameInfo.Resource_ValidTerrains() do
-        if row.ResourceType ~= nil and row.TerrainType ~= nil then
-            if bpResourceValidTerrainsByType[row.ResourceType] == nil then
-                bpResourceValidTerrainsByType[row.ResourceType] = {}
-            end
-            bpResourceValidTerrainsByType[row.ResourceType][row.TerrainType] = true
-        end
-    end
-
-    for row in GameInfo.Resource_ValidFeatures() do
-        if row.ResourceType ~= nil and row.FeatureType ~= nil then
-            if bpResourceValidFeaturesByType[row.ResourceType] == nil then
-                bpResourceValidFeaturesByType[row.ResourceType] = {}
-            end
-            bpResourceValidFeaturesByType[row.ResourceType][row.FeatureType] = true
-        end
-    end
-end
-
 local function BPGetPlotTerrainType(plot)
     if plot == nil then
         return nil
@@ -184,16 +179,6 @@ local function BPDescribePlotForDebug(plot)
         tostring(plot:GetDistrictType()),
         tostring(plot:GetImprovementType())
     )
-end
-
-local function BPPlotMatchesResourcePlacementRules(plot, resourceInfo)
-    if plot == nil or resourceInfo == nil or resourceInfo.ResourceType == nil then
-        return false
-    end
-
-    -- 资源种植已取消具体地形 / 地貌限制；这里只保留对象有效性，让 gameplay 继续
-    -- 依赖已有资源、奇观、区域、所有权等基础限制。
-    return true
 end
 
 local function BPClearImprovement(plot)
@@ -324,6 +309,7 @@ local function BPPlaceFeature(plot, featureIndex)
     TerrainBuilder.SetFeatureType(plot, featureIndex)
     BPSyncResourceYieldProperties(plot)
     BPClearImprovement(plot)
+    return plot:GetFeatureType() == featureIndex
 end
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -387,20 +373,6 @@ local function BPOnImprovementAddedToMap(x, y, improvementIndex, playerID)
             BPSyncResourceYieldProperties(plot)
             print(string.format(
                 '[BP_ResourcePlanter] Resource conversion canceled: target=%s(%s) player=%d not eligible %s.',
-                tostring(resourceType),
-                tostring(resourceName),
-                playerID,
-                BPDescribePlotForDebug(plot)
-            ))
-            bpConvertingPlots[plotKey] = nil
-            return
-        end
-
-        if not BPPlotMatchesResourcePlacementRules(plot, resourceInfo) then
-            BPClearImprovement(plot)
-            BPSyncResourceYieldProperties(plot)
-            print(string.format(
-                '[BP_ResourcePlanter] Resource conversion canceled: target=%s(%s) does not match plot rules player=%d %s.',
                 tostring(resourceType),
                 tostring(resourceName),
                 playerID,
@@ -480,6 +452,149 @@ local function BPOnImprovementAddedToMap(x, y, improvementIndex, playerID)
     end
 end
 
+local function BPDomainMatchesPlot(domain, plot)
+    if domain == 'DOMAIN_SEA' then
+        return plot:IsWater()
+    end
+    return domain == 'DOMAIN_LAND' and not plot:IsWater()
+end
+
+local function BPFeatureMatchesTerrain(featureInfo, plot)
+    local terrainType = BPGetPlotTerrainType(plot)
+    if featureInfo == nil or terrainType == nil then
+        return false
+    end
+
+    for row in GameInfo.Feature_ValidTerrains() do
+        if row.FeatureType == featureInfo.FeatureType and row.TerrainType == terrainType then
+            return true
+        end
+    end
+    return false
+end
+
+local function BPHasPlayerUnlockedResource(resourceInfo, player)
+    if resourceInfo == nil or player == nil then
+        return false
+    end
+
+    if resourceInfo.PrereqTech ~= nil then
+        local techInfo = GameInfo.Technologies[resourceInfo.PrereqTech]
+        if techInfo == nil or not player:GetTechs():HasTech(techInfo.Index) then
+            return false
+        end
+    end
+    if resourceInfo.PrereqCivic ~= nil then
+        local civicInfo = GameInfo.Civics[resourceInfo.PrereqCivic]
+        if civicInfo == nil or not player:GetCulture():HasCivic(civicInfo.Index) then
+            return false
+        end
+    end
+    return true
+end
+
+local function BPFindAvailableChargeAbility(unit)
+    local unitAbility = unit and unit:GetAbility() or nil
+    if unitAbility == nil then
+        return nil
+    end
+
+    for row in GameInfo.BPChargeSlots() do
+        local abilityType = 'ABILITY_BP_CONSUMED_CHARGE_'..row.Slot
+        if unitAbility:GetAbilityCount(abilityType) == 0 then
+            return abilityType
+        end
+    end
+    return nil
+end
+
+local function BPConsumeBuilderCharge(unit, abilityType)
+    local unitAbility = unit and unit:GetAbility() or nil
+    if unitAbility == nil or abilityType == nil then
+        return false
+    end
+
+    UnitManager.FinishMoves(unit)
+    unitAbility:ChangeAbilityCount(abilityType, 1)
+    return true
+end
+
+local function BPExecutePlantTarget(playerID, params)
+    local player = Players[playerID]
+    local unit = params and UnitManager.GetUnit(playerID, params.UnitID) or nil
+    local plot = params and Map.GetPlot(params.X, params.Y) or nil
+    if player == nil or not player:IsHuman() or unit == nil or plot == nil then
+        print('[BP_ResourcePlanter] Direct plant canceled: invalid player, unit, or plot.')
+        return
+    end
+    local unitInfo = GameInfo.Units[unit:GetType()]
+    if unitInfo == nil
+        or not bpBuilderUnitTypes[unitInfo.UnitType]
+        or unit:GetX() ~= params.X
+        or unit:GetY() ~= params.Y
+        or unit:GetBuildCharges() <= 0
+        or unit:GetMovesRemaining() <= 0 then
+        print('[BP_ResourcePlanter] Direct plant canceled: invalid builder state.')
+        return
+    end
+    if plot:GetImprovementType() ~= -1 then
+        print('[BP_ResourcePlanter] Direct plant canceled: plot already has an improvement.')
+        return
+    end
+
+    local chargeAbility = BPFindAvailableChargeAbility(unit)
+    if chargeAbility == nil then
+        print('[BP_ResourcePlanter] Direct plant canceled: consumed-charge ability slots exhausted.')
+        return
+    end
+
+    local targetKind = params.TargetKind
+    local targetIndex = params.TargetIndex
+    local planted = false
+    if targetKind == 'RESOURCE' then
+        local resourceInfo = GameInfo.Resources[targetIndex]
+        local domain = bpBuildableResourceDomains[targetIndex]
+        if resourceInfo ~= nil
+            and domain ~= nil
+            and BPHasPlayerUnlockedResource(resourceInfo, player)
+            and BPDomainMatchesPlot(domain, plot)
+            and BPIsValidResourcePlot(plot, playerID) then
+            planted = BPPlaceResource(plot, targetIndex)
+        end
+    elseif targetKind == 'FEATURE' then
+        local featureInfo = GameInfo.Features[targetIndex]
+        local domain = bpBuildableFeatureDomains[targetIndex]
+        if featureInfo ~= nil
+            and domain ~= nil
+            and BPDomainMatchesPlot(domain, plot)
+            and BPFeatureMatchesTerrain(featureInfo, plot)
+            and BPIsValidFeaturePlot(plot, playerID) then
+            planted = BPPlaceFeature(plot, targetIndex)
+        end
+    end
+
+    if not planted then
+        print(string.format(
+            '[BP_ResourcePlanter] Direct plant failed target=%s index=%s player=%d %s.',
+            tostring(targetKind),
+            tostring(targetIndex),
+            playerID,
+            BPDescribePlotForDebug(plot)
+        ))
+        return
+    end
+
+    BPConsumeBuilderCharge(unit, chargeAbility)
+    print(string.format(
+        '[BP_ResourcePlanter] Direct plant succeeded target=%s index=%s player=%d chargeAbility=%s %s.',
+        tostring(targetKind),
+        tostring(targetIndex),
+        playerID,
+        tostring(chargeAbility),
+        BPDescribePlotForDebug(plot)
+    ))
+end
+
 local function BPSyncAllVisibleResourceYieldProperties()
     local syncedCount = 0
 
@@ -537,7 +652,8 @@ local function BPInitialize()
     BPSanitizeExistingDummyImprovements()
     BPSyncAllVisibleResourceYieldProperties()
     Events.ImprovementAddedToMap.Add(BPOnImprovementAddedToMap)
-    print('[BP_ResourcePlanter] Initialized and listening for improvement placements.')
+    GameEvents.BPPlantTarget.Add(BPExecutePlantTarget)
+    print('[BP_ResourcePlanter] Initialized with independent planting and legacy dummy cleanup.')
 end
 
 -- Lua gameplay 脚本启动时，游戏状态还没完全准备好，所以这里和上游模组一样，

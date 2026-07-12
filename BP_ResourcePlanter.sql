@@ -115,7 +115,7 @@ SELECT
     'LOC_IMPROVEMENT_BP_GENERIC_DESCRIPTION',
     'ICON_RESOURCE_'||B.ResourceName,
     'NO_PLUNDER',
-    1, 0,
+    0, 0,
     B.Domain
 FROM BPBuildableResources B
 JOIN Resources R
@@ -172,14 +172,16 @@ FROM BPBuildableResources B
 JOIN BPValidFeatures VF ON VF.Domain = B.Domain;
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
--- 第 4 步：把建造者挂到每个占位改良上。
---          不修改 BuildCharges，仍然保持原版 3 次充能，这样每次种植资源都还是
---          正常消耗 1 次建造者充能。
---          只有玩家可以种植，AI 会在 Lua 层被拦住，避免它胡乱刷资源。
+-- 第 4 步：占位改良只保留给旧存档清理，不再注册为建造者动作。
+--          新版由独立 UI 直接请求 Gameplay 放置资源；保持 Buildable=0 可确保
+--          任意 UnitPanel 实现都不会重新列出这些内部对象。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-INSERT OR REPLACE INTO Improvement_ValidBuildUnits (ImprovementType, UnitType)
-SELECT 'IMPROVEMENT_BP_'||B.ResourceName, 'UNIT_BUILDER'
-FROM BPBuildableResources B;
+UPDATE Improvements
+SET Buildable = 0
+WHERE ImprovementType LIKE 'IMPROVEMENT_BP_%';
+
+DELETE FROM Improvement_ValidBuildUnits
+WHERE ImprovementType LIKE 'IMPROVEMENT_BP_%';
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -- 第 5 步：注册可种植地貌（森林 / 雨林）。
@@ -221,7 +223,7 @@ SELECT
     'LOC_IMPROVEMENT_BP_GENERIC_FEATURE_DESCRIPTION',
     BF.Icon,
     'NO_PLUNDER',
-    1, 0,
+    0, 0,
     BF.Domain
 FROM BPBuildableFeatures BF;
 
@@ -239,19 +241,63 @@ SELECT
 FROM BPBuildableFeatures BF
 JOIN Feature_ValidTerrains FVT ON FVT.FeatureType = BF.FeatureType;
 
-INSERT OR REPLACE INTO Improvement_ValidBuildUnits (ImprovementType, UnitType)
-SELECT 'IMPROVEMENT_BP_' || REPLACE(BF.FeatureType, 'FEATURE_', 'FEATURE_'), 'UNIT_BUILDER'
-FROM BPBuildableFeatures BF;
+UPDATE Improvements
+SET Buildable = 0
+WHERE ImprovementType LIKE 'IMPROVEMENT_BP_%';
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
--- 第 6 步：资源解锁时机仍沿用 Resources 表，但不再把前置直接写回占位改良。
+-- 第 6 步：独立入口成功种植后，以不可见 UnitAbility 逐次扣除建造者充能。
+--          EFFECT_ADJUST_UNIT_BUILD_CHARGES 不提供按次数缩放，因此每次使用一个
+--          独立能力槽；这是“和而不同”已验证采用的同类实现。
+-- ponytail: 在数据库最大基础充能上保留 32 次动态加成余量；只有运行时加成超过该余量才需扩充。
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS BPChargeSlots (
+    Slot INTEGER PRIMARY KEY
+);
+
+WITH RECURSIVE ChargeSlots(Slot, MaxSlot) AS (
+    SELECT 1, MAX(32, COALESCE((SELECT MAX(BuildCharges) FROM Units), 0) + 32)
+    UNION ALL
+    SELECT Slot + 1, MaxSlot FROM ChargeSlots WHERE Slot < MaxSlot
+)
+INSERT OR IGNORE INTO BPChargeSlots (Slot)
+SELECT Slot FROM ChargeSlots;
+
+INSERT OR IGNORE INTO Types (Type, Kind)
+SELECT 'ABILITY_BP_CONSUMED_CHARGE_' || Slot, 'KIND_ABILITY'
+FROM BPChargeSlots;
+
+INSERT OR IGNORE INTO TypeTags (Type, Tag)
+SELECT 'ABILITY_BP_CONSUMED_CHARGE_' || Slot, 'CLASS_BUILDER'
+FROM BPChargeSlots;
+
+INSERT OR IGNORE INTO UnitAbilities (UnitAbilityType, Inactive)
+SELECT 'ABILITY_BP_CONSUMED_CHARGE_' || Slot, 1
+FROM BPChargeSlots;
+
+INSERT OR IGNORE INTO Modifiers (ModifierId, ModifierType)
+SELECT 'ABILITY_BP_CONSUMED_CHARGE_' || Slot || '_MODIFIER',
+       'MODIFIER_UNIT_ADJUST_BUILDER_CHARGES'
+FROM BPChargeSlots;
+
+INSERT OR IGNORE INTO UnitAbilityModifiers (UnitAbilityType, ModifierId)
+SELECT 'ABILITY_BP_CONSUMED_CHARGE_' || Slot,
+       'ABILITY_BP_CONSUMED_CHARGE_' || Slot || '_MODIFIER'
+FROM BPChargeSlots;
+
+INSERT OR IGNORE INTO ModifierArguments (ModifierId, Name, Value)
+SELECT 'ABILITY_BP_CONSUMED_CHARGE_' || Slot || '_MODIFIER', 'Amount', -1
+FROM BPChargeSlots;
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-- 第 7 步：资源解锁时机仍沿用 Resources 表，但不再把前置直接写回占位改良。
 --          原因：Improvement.PrereqTech / PrereqCivic 会让科技树 / 市政树把这些
 --          临时占位改良也当成正式解锁项展示，出现资源旁边多一张额外图标。
---          改良是否应出现在建造者面板，改由 UnitPanel 共享 Lua 依据
+--          资源是否应出现在选择器，改由独立 launcher 依据
 --          BPBuildableResources 对应资源的 PrereqTech / PrereqCivic 做本地过滤。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
--- 第 7 步：把“资源可见性”判定包装成通用兼容层，兼容所有走标准
+-- 第 8 步：把“资源可见性”判定包装成通用兼容层，兼容所有走标准
 --          REQUIREMENT_PLOT_RESOURCE_VISIBLE 的官方 / 模组领袖与加成。
 --          同时也要兼容 REQUIREMENT_PLOT_RESOURCE_CLASS_TYPE_MATCHES
 --          （例如蒸汽时代维多利亚的“战略资源 +2 生产力”）。
