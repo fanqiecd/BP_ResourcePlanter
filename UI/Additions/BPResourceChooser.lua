@@ -15,13 +15,14 @@
 -- reparent —— add-in context 由 InGame.lua 的 LoadNewContext 循环自动挂载到
 -- /InGame/AdditionalUserInterfaces,Firaxis 官方文件从不 reparent popup context。
 --
--- 触发端(BP_ResourcePlantUnitPanel_Shared.lua)通过
+-- 触发端(BPResourceLauncher.lua)通过
 --   LuaEvents.BP_ResourceChooser_Open(entries)
 -- 发起;结束端通过
---   LuaEvents.BP_ResourceChooser_PlantSelected(improvementHash)
+--   LuaEvents.BP_ResourceChooser_PlantSelected(targetKind, targetIndex)
 --   LuaEvents.BP_ResourceChooser_Canceled()
 -- 回传结果。entries 每条携带:
---   ImprovementHash    -- 用于回传的占位改良 hash
+--   TargetKind         -- "RESOURCE" 或 "FEATURE"
+--   TargetIndex        -- Resources / Features 表索引
 --   Name               -- 本地化资源名
 --   IconId             -- 资源图标
 --   ResourceType       -- 资源项时为 "RESOURCE_*"，供 UI 端按别名兜底找图
@@ -137,6 +138,11 @@ local function Close()
     print("[BP_ResourcePlanter] BPResourceChooser closed (DequeuePopup).");
 end
 
+local function Invalidate()
+    Close();
+    m_pendingEntries = {};
+end
+
 -- ===========================================================================
 -- 按当前过滤键刷新资源条目列表。
 -- 若过滤后无任何条目,显示 EmptyHint 占位提示并隐藏滚动条内容。
@@ -191,11 +197,11 @@ function RefreshList()
                 end
                 instance.ResourceName:SetText(entry.Name);
                 instance.Button:SetToolTipString(entry.Name);
-                -- 选中条目:先关闭弹窗,再回传选中的 improvementHash。
+                -- 选中条目:先关闭弹窗,再回传目标类型与表索引。
                 instance.Button:RegisterCallback(Mouse.eLClick, function()
-                    print("[BP_ResourcePlanter] BPResourceChooser selected " .. tostring(entry.ImprovementHash) .. " / " .. tostring(entry.Name))
+                    print("[BP_ResourcePlanter] BPResourceChooser selected " .. tostring(entry.TargetKind) .. "/" .. tostring(entry.TargetIndex) .. " / " .. tostring(entry.Name))
                     Close();
-                    LuaEvents.BP_ResourceChooser_PlantSelected(entry.ImprovementHash);
+                    LuaEvents.BP_ResourceChooser_PlantSelected(entry.TargetKind, entry.TargetIndex);
                 end);
                 instance.Button:RegisterCallback(Mouse.eMouseEnter, function() UI.PlaySound("Main_Menu_Mouse_Over"); end);
             end
@@ -269,7 +275,7 @@ end
 
 -- ===========================================================================
 -- 取消(Esc / Cancel 按钮 / ScreenConsumer 右键):关闭并显式发 Canceled,
--- 让 BP_ResourcePlantUnitPanel_Shared.lua 清空 m_bpChooserValidImprovements。
+-- 让独立 launcher 刷新当前单位与地块状态。
 -- ===========================================================================
 local function OnCancel()
     print("[BP_ResourcePlanter] BPResourceChooser canceled.")
@@ -331,10 +337,13 @@ local function OnInit()
     Controls.ScreenConsumer:RegisterCallback(Mouse.eRClick, OnCancel);
 
     LuaEvents.BP_ResourceChooser_Open.Add(Open);
+    LuaEvents.BP_ResourceChooser_Invalidate.Add(Invalidate);
     print("[BP_ResourcePlanter] BPResourceChooser initialized (context " .. tostring(ContextPtr:GetID()) .. ").")
 end
 
 local function OnShutdown()
+    LuaEvents.BP_ResourceChooser_Open.Remove(Open);
+    LuaEvents.BP_ResourceChooser_Invalidate.Remove(Invalidate);
     if m_resourceEntryIM ~= nil then
         m_resourceEntryIM:ResetInstances();
     end

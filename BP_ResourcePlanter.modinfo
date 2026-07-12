@@ -28,14 +28,6 @@
       <File>BP_ResourcePlanter.lua</File>
     </AddGameplayScripts>
 
-    <ReplaceUIScript id="BP_Resource_UnitPanel_Replace">
-      <Properties>
-        <LoadOrder>200000</LoadOrder>
-        <LuaContext>UnitPanel</LuaContext>
-        <LuaReplace>UI/Replacements/UnitPanel_BP_All.lua</LuaReplace>
-      </Properties>
-    </ReplaceUIScript>
-
     <AddUserInterfaces id="BP_Resource_Chooser_UI">
       <!--
         官方约定(参 DLC/Babylon/Babylon.modinfo 的 Heroes_InGameUI):
@@ -49,31 +41,22 @@
       <File>UI/Additions/BPResourceChooser.xml</File>
     </AddUserInterfaces>
 
-    <!--
-      ImportFiles 只用于把可被 include() 的依赖脚本注册进 VFS。
-      - BPResourceChooser.lua 由同名 BPResourceChooser.xml 在 AddUserInterfaces 中
-        自动加载到 InGame 的子 context，不可在此重复声明，否则会在顶层 context
-        再次执行，此时 Controls.* 全部解析为 nil，导致按钮点击回调无法注册。
-      - UnitPanel_BP_All.lua 已由 ReplaceUIScript 加载到 UnitPanel context，
-        重复声明会让它在顶层 context 再执行一次，include/事件订阅双双失效。
-      - 仅 BP_ResourcePlantUnitPanel_Shared.lua 作为 include 依赖，必须保留。
-    -->
-    <ImportFiles id="BP_Resource_UI_Files">
+    <AddUserInterfaces id="BP_Resource_Launcher_UI">
       <Properties>
-        <LoadOrder>12010</LoadOrder>
+        <Context>InGame</Context>
       </Properties>
-      <File>UI/Replacements/BP_ResourcePlantUnitPanel_Shared.lua</File>
-    </ImportFiles>
+      <File>UI/Additions/BPResourceLauncher.xml</File>
+    </AddUserInterfaces>
   </InGameActions>
 
   <Files>
     <File>BP_ResourcePlanter.sql</File>
     <File>BP_ResourcePlanter_Text.sql</File>
     <File>BP_ResourcePlanter.lua</File>
+    <File>UI/Additions/BPResourceLauncher.xml</File>
+    <File>UI/Additions/BPResourceLauncher.lua</File>
     <File>UI/Additions/BPResourceChooser.xml</File>
     <File>UI/Additions/BPResourceChooser.lua</File>
-    <File>UI/Replacements/BP_ResourcePlantUnitPanel_Shared.lua</File>
-    <File>UI/Replacements/UnitPanel_BP_All.lua</File>
   </Files>
 
   <LocalizedText>
