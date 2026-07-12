@@ -12,15 +12,19 @@
   <InGameActions>
     <UpdateDatabase id="BP_Resource_Data">
       <Properties>
-        <LoadOrder>99999</LoadOrder>
+        <LoadOrder>1000</LoadOrder>
       </Properties>
       <File>BP_ResourcePlanter.sql</File>
     </UpdateDatabase>
 
-    <UpdateText id="BP_Resource_Text">
+    <UpdateDatabase id="BP_Resource_Compatibility">
       <Properties>
         <LoadOrder>10100</LoadOrder>
       </Properties>
+      <File>BP_ResourcePlanter_Compatibility.sql</File>
+    </UpdateDatabase>
+
+    <UpdateText id="BP_Resource_Text">
       <File>BP_ResourcePlanter_Text.sql</File>
     </UpdateText>
 
@@ -51,6 +55,7 @@
 
   <Files>
     <File>BP_ResourcePlanter.sql</File>
+    <File>BP_ResourcePlanter_Compatibility.sql</File>
     <File>BP_ResourcePlanter_Text.sql</File>
     <File>BP_ResourcePlanter.lua</File>
     <File>UI/Additions/BPResourceLauncher.xml</File>
