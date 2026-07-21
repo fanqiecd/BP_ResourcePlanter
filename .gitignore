@@ -1,12 +1,4 @@
-# .gitignore - 自动生成
-
-# ========================================注意========================================
-# 此文件由 init-project 自动生成，包含共性设置和项目特定规则。
-# 如需添加自定义规则，请在文件末尾的「自定义规则」部分添加。
-# ===================================================================================
-
-# === 共性设置（所有项目通用）===
-
+# Common OS / editor noise
 .DS_Store
 .DS_Store?
 ._*
@@ -39,17 +31,20 @@ credentials/
 *.cache
 tmp/
 temp/
-/tests/
-!/tests/
-/tests/*
-!/tests/test_buildable_features.py
-!/tests/test_feature_only_resource_terrains.py
-!/tests/test_resource_chooser_static.py
-!/tests/test_visible_resource_wrapper.py
-/plans/
-/reviews/
-/suggestions/
-/tmp/run_*/
+
+# Python helper scripts
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Archives / packaged builds
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Bensz / Codex scratch
 .auto-test-code-run.json
 .awesome-code/
 .bensz-api/
@@ -90,45 +85,5 @@ temp/
 .systematic-literature-review/
 .write-paper-sci/
 .write-paper/
-*.zip
-*.tar.gz
-*.rar
-*.7z
 
-# === 数据科学 设置 ===
-
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-.ipynb_checkpoints
-*.ipynb_checkpoints/
-*.csv
-*.xlsx
-*.parquet
-*.h5
-*.hdf5
-*.pkl
-*.pickle
-*.npy
-*.npz
-*.pt
-*.pth
-*.onnx
-*.model
-*.weights
-data/raw/
-data/processed/
-models/
-checkpoints/
-outputs/
-mlruns/
-mlartifacts/
-runs/
-logs/
-
-# === 自定义规则（在下方添加项目特定的忽略规则）===
-
-# 示例：
-# local-config.yml
-# *.backup
+# Add project-specific rules below.
