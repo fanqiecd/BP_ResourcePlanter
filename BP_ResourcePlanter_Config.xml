@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<GameInfo>
+  <Parameters>
+    <Row ParameterId="BP_USE_VANILLA_RESOURCE_RULES"
+         Name="LOC_BP_USE_VANILLA_RESOURCE_RULES_NAME"
+         Description="LOC_BP_USE_VANILLA_RESOURCE_RULES_DESCRIPTION"
+         Domain="bool"
+         DefaultValue="0"
+         ConfigurationGroup="Game"
+         ConfigurationId="BP_USE_VANILLA_RESOURCE_RULES"
+         GroupId="AdvancedOptions"
+         SortIndex="2025"/>
+  </Parameters>
+</GameInfo>

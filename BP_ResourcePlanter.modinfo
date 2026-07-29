@@ -9,6 +9,16 @@
     <CompatibleVersions>2.0</CompatibleVersions>
   </Properties>
 
+  <FrontEndActions>
+    <UpdateDatabase id="BP_Resource_Config">
+      <File>BP_ResourcePlanter_Config.xml</File>
+    </UpdateDatabase>
+
+    <UpdateText id="BP_Resource_Config_Text">
+      <File>BP_ResourcePlanter_Text.sql</File>
+    </UpdateText>
+  </FrontEndActions>
+
   <InGameActions>
     <UpdateDatabase id="BP_Resource_Data">
       <Properties>
@@ -54,6 +64,7 @@
   </InGameActions>
 
   <Files>
+    <File>BP_ResourcePlanter_Config.xml</File>
     <File>BP_ResourcePlanter.sql</File>
     <File>BP_ResourcePlanter_Compatibility.sql</File>
     <File>BP_ResourcePlanter_Text.sql</File>

@@ -7,6 +7,7 @@
 
 local BP_SINGLE_ACTION_ICON:string = "ICON_UNITOPERATION_PLANT_FOREST";
 local BP_FEATURE_FILTER_KEY:string = "FEATURE";
+local BP_VANILLA_RESOURCE_RULES_CONFIG:string = "BP_USE_VANILLA_RESOURCE_RULES";
 
 local BP_RESOURCE_CLASS_PRIORITY:table = {
     RESOURCECLASS_STRATEGIC = 1,
@@ -18,6 +19,8 @@ local m_builderUnitTypes:table = nil;
 local m_resourceDefinitions:table = nil;
 local m_featureDefinitions:table = nil;
 local m_featureTerrainsByType:table = nil;
+local m_resourceTerrainsByType:table = nil;
+local m_resourceFeaturesByType:table = nil;
 local m_launcherAttached:boolean = false;
 
 local function BPBuildDataCache()
@@ -29,6 +32,8 @@ local function BPBuildDataCache()
     m_resourceDefinitions = {};
     m_featureDefinitions = {};
     m_featureTerrainsByType = {};
+    m_resourceTerrainsByType = {};
+    m_resourceFeaturesByType = {};
 
     for row in GameInfo.TypeTags() do
         if row.Tag == "CLASS_BUILDER" then
@@ -41,6 +46,16 @@ local function BPBuildDataCache()
             m_featureTerrainsByType[row.FeatureType] = {};
         end
         m_featureTerrainsByType[row.FeatureType][row.TerrainType] = true;
+    end
+
+    for row in GameInfo.Resource_ValidTerrains() do
+        m_resourceTerrainsByType[row.ResourceType] = m_resourceTerrainsByType[row.ResourceType] or {};
+        m_resourceTerrainsByType[row.ResourceType][row.TerrainType] = true;
+    end
+
+    for row in GameInfo.Resource_ValidFeatures() do
+        m_resourceFeaturesByType[row.ResourceType] = m_resourceFeaturesByType[row.ResourceType] or {};
+        m_resourceFeaturesByType[row.ResourceType][row.FeatureType] = true;
     end
 
     for row in GameInfo.BPBuildableResources() do
@@ -134,6 +149,24 @@ local function BPDomainMatchesPlot(domain:string, plot:table)
         return plot:IsWater();
     end
     return domain == "DOMAIN_LAND" and not plot:IsWater();
+end
+
+local function BPResourceMatchesVanillaRules(resourceType:string, plot:table)
+    local value = GameConfiguration.GetValue(BP_VANILLA_RESOURCE_RULES_CONFIG);
+    if value ~= true and value ~= 1 then
+        return true;
+    end
+
+    BPBuildDataCache();
+    local featureInfo:table = GameInfo.Features[plot:GetFeatureType()];
+    if featureInfo ~= nil then
+        local validFeatures:table = m_resourceFeaturesByType[resourceType];
+        return validFeatures ~= nil and validFeatures[featureInfo.FeatureType] == true;
+    end
+
+    local terrainInfo:table = GameInfo.Terrains[plot:GetTerrainType()];
+    local validTerrains:table = m_resourceTerrainsByType[resourceType];
+    return terrainInfo ~= nil and validTerrains ~= nil and validTerrains[terrainInfo.TerrainType] == true;
 end
 
 local function BPFeatureMatchesTerrain(featureType:string, plot:table)
@@ -235,6 +268,7 @@ local function BPCollectPlantableEntries(pUnit:table)
         for _, definition in ipairs(m_resourceDefinitions) do
             local resourceInfo:table = definition.Info;
             if BPDomainMatchesPlot(definition.Domain, plot)
+                and BPResourceMatchesVanillaRules(resourceInfo.ResourceType, plot)
                 and BPHasPlayerUnlockedResource(resourceInfo, player) then
                 table.insert(entries, BPCreateEntry(
                     "RESOURCE",

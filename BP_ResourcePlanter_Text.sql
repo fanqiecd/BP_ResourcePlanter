@@ -7,6 +7,10 @@
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 INSERT OR REPLACE INTO LocalizedText (Tag, Language, Text) VALUES
+    ('LOC_BP_USE_VANILLA_RESOURCE_RULES_NAME', 'en_US', 'Use Vanilla Resource Placement Rules'),
+    ('LOC_BP_USE_VANILLA_RESOURCE_RULES_NAME', 'zh_Hans_CN', '遵循原版资源落点限制'),
+    ('LOC_BP_USE_VANILLA_RESOURCE_RULES_DESCRIPTION', 'en_US', 'Only allows resources on tiles where they can naturally spawn under the vanilla resource placement tables.'),
+    ('LOC_BP_USE_VANILLA_RESOURCE_RULES_DESCRIPTION', 'zh_Hans_CN', '仅允许将资源种植在原版资源落点表允许其自然生成的格子上。'),
     ('LOC_IMPROVEMENT_BP_GENERIC_DESCRIPTION', 'en_US', 'Plants this resource on the selected tile.'),
     ('LOC_IMPROVEMENT_BP_GENERIC_DESCRIPTION', 'zh_Hans_CN', '在所选格子上种植该资源。'),
     ('LOC_IMPROVEMENT_BP_GENERIC_FEATURE_DESCRIPTION', 'en_US', 'Plants this feature on the selected tile.'),

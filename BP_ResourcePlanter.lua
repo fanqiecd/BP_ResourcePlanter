@@ -38,6 +38,7 @@ local BP_VISIBLE_RESOURCE_PROPERTY = 'BP_VisibleResourceForYieldBonuses'
 local BP_BONUS_RESOURCE_PROPERTY = 'BP_HasBonusResourceForYieldBonuses'
 local BP_LUXURY_RESOURCE_PROPERTY = 'BP_HasLuxuryResourceForYieldBonuses'
 local BP_STRATEGIC_RESOURCE_PROPERTY = 'BP_HasStrategicResourceForYieldBonuses'
+local BP_VANILLA_RESOURCE_RULES_CONFIG = 'BP_USE_VANILLA_RESOURCE_RULES'
 local function BPInitLookup()
     for row in GameInfo.TypeTags() do
         if row.Tag == 'CLASS_BUILDER' then
@@ -253,13 +254,23 @@ local function BPIsCommonPlotValid(plot, player)
     return true
 end
 
-local function BPIsValidResourcePlot(plot, player)
+local function BPUsesVanillaResourceRules()
+    local value = GameConfiguration.GetValue(BP_VANILLA_RESOURCE_RULES_CONFIG)
+    return value == true or value == 1
+end
+
+local function BPIsValidResourcePlot(plot, player, resourceInfo)
     if not BPIsCommonPlotValid(plot, player) then
         return false
     end
 
     -- 资源种植仍然禁止覆盖现有资源。
     if plot:GetResourceType() ~= -1 then
+        return false
+    end
+
+    if BPUsesVanillaResourceRules()
+        and (resourceInfo == nil or not ResourceBuilder.CanHaveResource(plot, resourceInfo.Hash)) then
         return false
     end
 
@@ -368,7 +379,7 @@ local function BPOnImprovementAddedToMap(x, y, improvementIndex, playerID)
             BPDescribePlotForDebug(plot)
         ))
 
-        if not BPIsValidResourcePlot(plot, playerID) then
+        if not BPIsValidResourcePlot(plot, playerID, resourceInfo) then
             BPClearImprovement(plot)
             BPSyncResourceYieldProperties(plot)
             print(string.format(
@@ -558,7 +569,7 @@ local function BPExecutePlantTarget(playerID, params)
             and domain ~= nil
             and BPHasPlayerUnlockedResource(resourceInfo, player)
             and BPDomainMatchesPlot(domain, plot)
-            and BPIsValidResourcePlot(plot, playerID) then
+            and BPIsValidResourcePlot(plot, playerID, resourceInfo) then
             planted = BPPlaceResource(plot, targetIndex)
         end
     elseif targetKind == 'FEATURE' then

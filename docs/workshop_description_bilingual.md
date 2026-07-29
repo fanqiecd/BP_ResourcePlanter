@@ -21,6 +21,7 @@
 [*]陆地资源可种在全部陆地地形与普通陆地地貌上（包含泛滥平原、沼泽、森林、雨林、绿洲等）
 [*]海洋资源可种在海岸 / 远洋与普通海洋地貌上
 [*]资源必须满足当前科技 / 市政解锁，并且不能种在已有资源、改良、区域、自然奇观或他国领土上
+[*]高级设置可开启“遵循原版资源落点限制”；开启后只显示并允许原版落点表认可的资源（默认关闭）
 [*]森林与雨林可与已有资源共存，但不能叠加到现有地貌上
 [*]AI 默认禁用，避免 AI 无限制刷资源
 [/list]
@@ -65,6 +66,7 @@ The normal flow places the real resource or feature directly, without leaving a 
 [*]Land resources can be planted on all land terrains and ordinary land features, including Floodplains, Marsh, Forest, Rainforest, and Oasis
 [*]Sea resources can be planted on coast / ocean and ordinary sea features
 [*]Resources must be unlocked by the current technology / civic and cannot be planted on tiles with an existing resource, improvement, district, natural wonder, or foreign ownership
+[*]Advanced Setup can enable "Use Vanilla Resource Placement Rules"; when enabled, only resources accepted by the vanilla placement tables are shown and allowed (off by default)
 [*]Forest and Rainforest can coexist with an existing resource, but cannot be placed on top of an existing feature
 [*]AI is disabled by default to prevent unlimited resource spam
 [/list]
