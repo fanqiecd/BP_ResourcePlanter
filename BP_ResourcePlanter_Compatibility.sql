@@ -11,6 +11,84 @@
 -- 同步到地块上的 property 作为兼容判定分支。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-- 第 0 步：补登记在核心数据之后才加入的资源。
+--          部分资源扩展（例如 Workshop 3787861188“C的资源扩展”）与本模组的核心
+--          数据同为 LoadOrder=1000。若本模组先执行，核心 SQL 看不到这些资源，后续
+--          选择器也就没有 BPBuildableResources 行可读。兼容层在 10100 执行，因此
+--          这里重新扫描当前 Resources 表，把这类资源补进完整的占位设施数据链。
+--
+--          这里仍只接受标准的加成 / 奢侈 / 战略资源，且要求资源至少有一侧自然生成
+--          频率。后一个条件与核心 SQL 保持一致，避免把不会由地图初始化的垄断资源
+--          送进 ResourceBuilder.SetResourceType。
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+INSERT OR REPLACE INTO BPBuildableResources (ResourceName, PrereqTech, PrereqCivic, Domain)
+SELECT
+    REPLACE(R.ResourceType, 'RESOURCE_', ''),
+    R.PrereqTech,
+    R.PrereqCivic,
+    CASE
+        WHEN EXISTS (
+            SELECT 1 FROM Resource_ValidTerrains VT
+            WHERE VT.ResourceType = R.ResourceType
+              AND VT.TerrainType NOT IN ('TERRAIN_COAST','TERRAIN_OCEAN')
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM Resource_ValidFeatures RVF
+            JOIN Feature_ValidTerrains FVT ON FVT.FeatureType = RVF.FeatureType
+            JOIN Features F ON F.FeatureType = RVF.FeatureType
+            WHERE RVF.ResourceType = R.ResourceType
+              AND F.NaturalWonder = 0
+              AND FVT.TerrainType NOT IN ('TERRAIN_COAST','TERRAIN_OCEAN')
+        )
+        THEN 'DOMAIN_LAND'
+        ELSE 'DOMAIN_SEA'
+    END AS Domain
+FROM Resources R
+WHERE R.ResourceClassType IN ('RESOURCECLASS_BONUS','RESOURCECLASS_LUXURY','RESOURCECLASS_STRATEGIC')
+  AND (R.Frequency > 0 OR R.SeaFrequency > 0);
+
+INSERT OR IGNORE INTO Types (Type, Kind)
+SELECT 'IMPROVEMENT_BP_'||B.ResourceName, 'KIND_IMPROVEMENT'
+FROM BPBuildableResources B;
+
+INSERT OR IGNORE INTO Improvements (
+    ImprovementType, Name,                              Description,                                       Icon,                       PlunderType, Buildable, Workable, Domain
+)
+SELECT
+    'IMPROVEMENT_BP_'||B.ResourceName,
+    R.Name,
+    'LOC_IMPROVEMENT_BP_GENERIC_DESCRIPTION',
+    'ICON_RESOURCE_'||B.ResourceName,
+    'NO_PLUNDER',
+    0, 0,
+    B.Domain
+FROM BPBuildableResources B
+JOIN Resources R
+  ON R.ResourceType = 'RESOURCE_'||B.ResourceName;
+
+INSERT OR REPLACE INTO Improvements_XP2 (ImprovementType, DisasterResistant)
+SELECT 'IMPROVEMENT_BP_'||B.ResourceName, 1
+FROM BPBuildableResources B
+WHERE EXISTS (
+    SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'Improvements_XP2'
+);
+
+INSERT OR IGNORE INTO Improvement_ValidTerrains (ImprovementType, TerrainType)
+SELECT
+    'IMPROVEMENT_BP_'||B.ResourceName,
+    VT.TerrainType
+FROM BPBuildableResources B
+JOIN BPValidTerrains VT ON VT.Domain = B.Domain;
+
+INSERT OR IGNORE INTO Improvement_ValidFeatures (ImprovementType, FeatureType)
+SELECT
+    'IMPROVEMENT_BP_'||B.ResourceName,
+    VF.FeatureType
+FROM BPBuildableResources B
+JOIN BPValidFeatures VF ON VF.Domain = B.Domain;
+
 DROP TABLE IF EXISTS BP_VisibleResourceRequirementsToWrap;
 
 CREATE TEMP TABLE BP_VisibleResourceRequirementsToWrap AS
