@@ -22,7 +22,7 @@
 [*]海洋资源可种在海岸 / 远洋与普通海洋地貌上
 [*]资源必须满足当前科技 / 市政解锁，并且不能种在已有资源、改良、区域、自然奇观或他国领土上
 [*]高级设置可开启“遵循原版资源落点限制”；开启后只显示并允许原版落点表认可的资源（默认关闭）
-[*]森林与雨林可与已有资源共存，但不能叠加到现有地貌上
+[*]森林与雨林可与已有资源共存，但不能叠加到现有地貌上；开启原版落点限制后，已有资源必须允许出现在目标地貌中（例如鹿可搭配森林，石头不可）
 [*]AI 默认禁用，避免 AI 无限制刷资源
 [/list]
 
@@ -67,7 +67,7 @@ The normal flow places the real resource or feature directly, without leaving a 
 [*]Sea resources can be planted on coast / ocean and ordinary sea features
 [*]Resources must be unlocked by the current technology / civic and cannot be planted on tiles with an existing resource, improvement, district, natural wonder, or foreign ownership
 [*]Advanced Setup can enable "Use Vanilla Resource Placement Rules"; when enabled, only resources accepted by the vanilla placement tables are shown and allowed (off by default)
-[*]Forest and Rainforest can coexist with an existing resource, but cannot be placed on top of an existing feature
+[*]Forest and Rainforest can coexist with an existing resource, but cannot be placed on top of an existing feature; with vanilla placement rules enabled, the resource must support the target feature (for example, Deer supports Forest, but Stone does not)
 [*]AI is disabled by default to prevent unlimited resource spam
 [/list]
 

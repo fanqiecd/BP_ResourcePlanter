@@ -169,6 +169,22 @@ local function BPResourceMatchesVanillaRules(resourceType:string, plot:table)
     return terrainInfo ~= nil and validTerrains ~= nil and validTerrains[terrainInfo.TerrainType] == true;
 end
 
+local function BPFeatureMatchesVanillaRules(featureType:string, plot:table)
+    local value = GameConfiguration.GetValue(BP_VANILLA_RESOURCE_RULES_CONFIG);
+    if (value ~= true and value ~= 1) or plot:GetResourceType() == -1 then
+        return true;
+    end
+
+    BPBuildDataCache();
+    local resourceInfo:table = GameInfo.Resources[plot:GetResourceType()];
+    if resourceInfo == nil then
+        return false;
+    end
+    -- 按目标地貌检查现有资源，不能沿用种植前裸地的地形判定。
+    local validFeatures:table = m_resourceFeaturesByType[resourceInfo.ResourceType];
+    return validFeatures ~= nil and validFeatures[featureType] == true;
+end
+
 local function BPFeatureMatchesTerrain(featureType:string, plot:table)
     BPBuildDataCache();
     local terrainInfo:table = GameInfo.Terrains[plot:GetTerrainType()];
@@ -287,6 +303,7 @@ local function BPCollectPlantableEntries(pUnit:table)
             local featureInfo:table = definition.Info;
             if BPDomainMatchesPlot(definition.Domain, plot)
                 and BPFeatureMatchesTerrain(featureInfo.FeatureType, plot)
+                and BPFeatureMatchesVanillaRules(featureInfo.FeatureType, plot)
                 and BPHasPlayerUnlockedFeature(featureInfo, player) then
                 table.insert(entries, BPCreateEntry(
                     "FEATURE",

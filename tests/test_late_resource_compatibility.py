@@ -179,7 +179,11 @@ def seed_core_data(connection: sqlite3.Connection) -> None:
 def seed_target_resources(connection: sqlite3.Connection) -> None:
     target_base_path = TARGET_MOD_ROOT / "Base.sql"
     if target_base_path.exists():
-        target_base_sql = target_base_path.read_text(encoding="utf-8")
+        # Only ASCII identifiers are inspected; preserve non-UTF-8 comment bytes
+        # from installed workshop versions without depending on their encoding.
+        target_base_sql = target_base_path.read_text(
+            encoding="utf-8", errors="surrogateescape"
+        )
         declared_resource_types = set(
             re.findall(
                 r"\('(RESOURCE_C_[A-Z0-9_]+)',\s*'LOC_RESOURCE_C_[A-Z0-9_]+_NAME',\s*'RESOURCECLASS_",

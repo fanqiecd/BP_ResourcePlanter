@@ -277,13 +277,28 @@ local function BPIsValidResourcePlot(plot, player, resourceInfo)
     return true
 end
 
-local function BPIsValidFeaturePlot(plot, player)
+local function BPIsValidFeaturePlot(plot, player, featureInfo)
     if not BPIsCommonPlotValid(plot, player) then
         return false
     end
 
     -- 地貌种植允许与已有资源共存，但不允许和现有地貌叠加。
     if plot:GetFeatureType() ~= -1 then
+        return false
+    end
+
+    -- 开启原版规则时，种下地貌后的资源 / 地貌组合也必须合法。
+    -- 不能只检查种植前的裸地，否则可以先放石头再种森林绕过资源落点限制。
+    if BPUsesVanillaResourceRules() and plot:GetResourceType() ~= -1 then
+        local resourceInfo = GameInfo.Resources[plot:GetResourceType()]
+        if resourceInfo == nil or featureInfo == nil then
+            return false
+        end
+        for row in GameInfo.Resource_ValidFeatures() do
+            if row.ResourceType == resourceInfo.ResourceType and row.FeatureType == featureInfo.FeatureType then
+                return true
+            end
+        end
         return false
     end
 
@@ -428,7 +443,7 @@ local function BPOnImprovementAddedToMap(x, y, improvementIndex, playerID)
             tostring(improvementIndex),
             BPDescribePlotForDebug(plot)
         ))
-        if not BPIsValidFeaturePlot(plot, playerID) then
+        if not BPIsValidFeaturePlot(plot, playerID, GameInfo.Features[featureIndex]) then
             BPClearImprovement(plot)
             BPSyncResourceYieldProperties(plot)
             print(string.format(
@@ -579,7 +594,7 @@ local function BPExecutePlantTarget(playerID, params)
             and domain ~= nil
             and BPDomainMatchesPlot(domain, plot)
             and BPFeatureMatchesTerrain(featureInfo, plot)
-            and BPIsValidFeaturePlot(plot, playerID) then
+            and BPIsValidFeaturePlot(plot, playerID, featureInfo) then
             planted = BPPlaceFeature(plot, targetIndex)
         end
     end
