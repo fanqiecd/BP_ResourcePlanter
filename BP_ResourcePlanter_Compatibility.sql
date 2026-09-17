@@ -68,12 +68,9 @@ FROM BPBuildableResources B
 JOIN Resources R
   ON R.ResourceType = 'RESOURCE_'||B.ResourceName;
 
-INSERT OR REPLACE INTO Improvements_XP2 (ImprovementType, DisasterResistant)
-SELECT 'IMPROVEMENT_BP_'||B.ResourceName, 1
-FROM BPBuildableResources B
-WHERE EXISTS (
-    SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'Improvements_XP2'
-);
+-- Improvements_XP2 只存在于 Gathering Storm。不要在通用兼容层中直接引用它：
+-- SQLite 会先解析 INSERT 的目标表，sqlite_master 的 EXISTS 不能避免原版规则集的
+-- “no such table”错误。这里的占位改良只服务于旧存档清理，无需抗灾属性。
 
 INSERT OR IGNORE INTO Improvement_ValidTerrains (ImprovementType, TerrainType)
 SELECT

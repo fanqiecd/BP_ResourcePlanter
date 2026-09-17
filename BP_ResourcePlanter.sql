@@ -130,16 +130,10 @@ JOIN Resources R
 --      不会在等待资源替换期间产出任何收益。
 -- Lua 脚本会在设置资源的同一帧移除占位改良，因此玩家最终只会看到资源本身。
 
--- 让这些占位改良具备抗灾属性（与原模组给区域占位改良加抗灾的技巧一致），避免
--- 可受灾格子上的资源凭空消失。
--- 这里包了一层 sqlite_master 判断，这样即便没有 XP2（Gathering Storm）相关
--- 表结构，文件也能正常加载。
-INSERT OR REPLACE INTO Improvements_XP2 (ImprovementType, DisasterResistant)
-SELECT 'IMPROVEMENT_BP_'||B.ResourceName, 1
-FROM BPBuildableResources B
-WHERE EXISTS (
-    SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'Improvements_XP2'
-);
+-- 不写 Improvements_XP2：该表只随 Gathering Storm 提供。SQLite 会在执行 WHERE
+-- 条件前解析 INSERT 的目标表，因此用 sqlite_master 的 EXISTS 无法保护原版规则集，
+-- 反而会让本文件在原版中从这里起停止执行。占位改良只用于旧存档清理，且创建后会
+-- 立即被 Lua 移除，不需要额外的抗灾属性。
 
 -- 占位改良始终按 Domain 放开，确保旧存档清理路径和独立 UI 的候选超集可用；
 -- 高级设置中的“遵循原版资源落点限制”由 UI 与 Gameplay Lua 在运行时共同校验。
@@ -229,13 +223,6 @@ SELECT
     0, 0,
     BF.Domain
 FROM BPBuildableFeatures BF;
-
-INSERT OR REPLACE INTO Improvements_XP2 (ImprovementType, DisasterResistant)
-SELECT 'IMPROVEMENT_BP_' || REPLACE(BF.FeatureType, 'FEATURE_', 'FEATURE_'), 1
-FROM BPBuildableFeatures BF
-WHERE EXISTS (
-    SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'Improvements_XP2'
-);
 
 INSERT OR REPLACE INTO Improvement_ValidTerrains (ImprovementType, TerrainType)
 SELECT
