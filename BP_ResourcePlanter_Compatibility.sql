@@ -18,11 +18,12 @@
 --          选择器也就没有 BPBuildableResources 行可读。兼容层在 10100 执行，因此
 --          这里重新扫描当前 Resources 表，把这类资源补进完整的占位设施数据链。
 --
---          这里仍只接受标准的加成 / 奢侈 / 战略资源，且要求资源至少有一侧自然生成
---          频率。后一个条件与核心 SQL 保持一致，避免把不会由地图初始化的垄断资源
+--          这里仍只接受标准的加成 / 奢侈 / 战略资源，外加秘密结社的地脉
+--          （RESOURCECLASS_LEY_LINE），且要求资源至少有一侧自然生成频率。
+--          后一个条件与核心 SQL 保持一致，避免把不会由地图初始化的垄断资源
 --          送进 ResourceBuilder.SetResourceType。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-INSERT OR REPLACE INTO BPBuildableResources (ResourceName, PrereqTech, PrereqCivic, Domain)
+INSERT OR REPLACE INTO BPBuildableResources (ResourceName, PrereqTech, PrereqCivic, Domain, RequiresVisibility)
 SELECT
     REPLACE(R.ResourceType, 'RESOURCE_', ''),
     R.PrereqTech,
@@ -44,9 +45,20 @@ SELECT
         )
         THEN 'DOMAIN_LAND'
         ELSE 'DOMAIN_SEA'
-    END AS Domain
+    END AS Domain,
+    -- 与核心数据保持同一条规则：Resource_Conditions 标记为“由效果解锁”的资源
+    -- （原版即地脉）没有科技 / 市政前置可查，必须交由运行时做可见性校验。
+    CASE
+        WHEN EXISTS (
+            SELECT 1 FROM Resource_Conditions RC
+            WHERE RC.ResourceType = R.ResourceType
+              AND RC.UnlocksFromEffect = 1
+        )
+        THEN 1
+        ELSE 0
+    END AS RequiresVisibility
 FROM Resources R
-WHERE R.ResourceClassType IN ('RESOURCECLASS_BONUS','RESOURCECLASS_LUXURY','RESOURCECLASS_STRATEGIC')
+WHERE R.ResourceClassType IN ('RESOURCECLASS_BONUS','RESOURCECLASS_LUXURY','RESOURCECLASS_STRATEGIC','RESOURCECLASS_LEY_LINE')
   AND (R.Frequency > 0 OR R.SeaFrequency > 0);
 
 INSERT OR IGNORE INTO Types (Type, Kind)

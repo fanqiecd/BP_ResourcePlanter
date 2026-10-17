@@ -9,8 +9,8 @@
 INSERT OR REPLACE INTO LocalizedText (Tag, Language, Text) VALUES
     ('LOC_BP_USE_VANILLA_RESOURCE_RULES_NAME', 'en_US', 'Use Vanilla Resource Placement Rules'),
     ('LOC_BP_USE_VANILLA_RESOURCE_RULES_NAME', 'zh_Hans_CN', '遵循原版资源落点限制'),
-    ('LOC_BP_USE_VANILLA_RESOURCE_RULES_DESCRIPTION', 'en_US', 'Only allows resources on tiles where they can naturally spawn under the vanilla resource placement tables. Planting Forest or Rainforest also requires compatibility with any existing resource.'),
-    ('LOC_BP_USE_VANILLA_RESOURCE_RULES_DESCRIPTION', 'zh_Hans_CN', '仅允许将资源种植在原版资源落点表允许其自然生成的格子上。种植森林或雨林时，也会检查其与地块上已有资源是否兼容。'),
+    ('LOC_BP_USE_VANILLA_RESOURCE_RULES_DESCRIPTION', 'en_US', 'Only allows resources on tiles where they can naturally spawn under the vanilla resource placement tables. Planting a feature also requires compatibility with any existing resource.'),
+    ('LOC_BP_USE_VANILLA_RESOURCE_RULES_DESCRIPTION', 'zh_Hans_CN', '仅允许将资源种植在原版资源落点表允许其自然生成的格子上。种植地貌时，也会检查其与地块上已有资源是否兼容。'),
     ('LOC_IMPROVEMENT_BP_GENERIC_DESCRIPTION', 'en_US', 'Plants this resource on the selected tile.'),
     ('LOC_IMPROVEMENT_BP_GENERIC_DESCRIPTION', 'zh_Hans_CN', '在所选格子上种植该资源。'),
     ('LOC_IMPROVEMENT_BP_GENERIC_FEATURE_DESCRIPTION', 'en_US', 'Plants this feature on the selected tile.'),
@@ -23,6 +23,10 @@ INSERT OR REPLACE INTO LocalizedText (Tag, Language, Text) VALUES
     ('LOC_BP_RESOURCE_CHOOSER_ACTION_DESCRIPTION', 'zh_Hans_CN', '从当前格子可种植的资源或地貌中选择一种进行种植。'),
     ('LOC_BP_RESOURCE_CHOOSER_AVAILABLE', 'en_US', 'Available entries:'),
     ('LOC_BP_RESOURCE_CHOOSER_AVAILABLE', 'zh_Hans_CN', '当前可种植项目：'),
+    ('LOC_BP_RESOURCE_REMOVE_ACTION_DESCRIPTION', 'en_US', 'Remove the resource from this tile so it can be used for a district or another improvement.'),
+    ('LOC_BP_RESOURCE_REMOVE_ACTION_DESCRIPTION', 'zh_Hans_CN', '清除当前地块上的资源，清除后可建造区域或其他改良设施。'),
+    ('LOC_BP_FEATURE_REMOVE_ACTION_DESCRIPTION', 'en_US', 'Remove the feature planted by this mod from this tile.'),
+    ('LOC_BP_FEATURE_REMOVE_ACTION_DESCRIPTION', 'zh_Hans_CN', '清除本模组种植在当前地块上的地貌。'),
     -- 分类筛选标签(全部/加成/奢侈/战略/地貌)与空类提示。
     ('LOC_BP_FILTER_ALL', 'en_US', 'All'),
     ('LOC_BP_FILTER_ALL', 'zh_Hans_CN', '全部'),
@@ -35,4 +39,14 @@ INSERT OR REPLACE INTO LocalizedText (Tag, Language, Text) VALUES
     ('LOC_BP_FILTER_FEATURE', 'en_US', 'Features'),
     ('LOC_BP_FILTER_FEATURE', 'zh_Hans_CN', '地貌'),
     ('LOC_BP_RESOURCE_CHOOSER_EMPTY_HINT', 'en_US', 'No plantable resources of this class on the current tile.'),
-    ('LOC_BP_RESOURCE_CHOOSER_EMPTY_HINT', 'zh_Hans_CN', '当前格子没有可种植的该类资源。');
+    ('LOC_BP_RESOURCE_CHOOSER_EMPTY_HINT', 'zh_Hans_CN', '当前格子没有可种植的该类资源。'),
+    -- 入口按钮提示里的自诊结论：选择器是独立 add-in context，静默失败时既没有弹窗
+    -- 也没有日志，只能把结论摆到界面提示上。
+    ('LOC_BP_CHOOSER_DIAG_SINGLE', 'en_US', 'Only one entry is plantable here — planted directly.'),
+    ('LOC_BP_CHOOSER_DIAG_SINGLE', 'zh_Hans_CN', '此处仅 1 项可种，已直接种植（不弹窗）。'),
+    ('LOC_BP_CHOOSER_DIAG_DEAD', 'en_US', 'Chooser UI did not initialize (no handshake reply).'),
+    ('LOC_BP_CHOOSER_DIAG_DEAD', 'zh_Hans_CN', '选择器未响应：它的界面没有完成初始化。'),
+    ('LOC_BP_CHOOSER_DIAG_NO_HANDLER', 'en_US', 'Chooser received no open request.'),
+    ('LOC_BP_CHOOSER_DIAG_NO_HANDLER', 'zh_Hans_CN', '选择器没有接收到打开请求。'),
+    ('LOC_BP_CHOOSER_DIAG_ABORTED', 'en_US', 'Chooser aborted while opening.'),
+    ('LOC_BP_CHOOSER_DIAG_ABORTED', 'zh_Hans_CN', '选择器在打开过程中中断了。');

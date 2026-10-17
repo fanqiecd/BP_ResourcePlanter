@@ -29,7 +29,8 @@
 --   ResourceClassType  -- "RESOURCECLASS_BONUS"/"LUXURY"/"STRATEGIC" 或 nil
 --   EntryKind          -- "RESOURCE" 或 "FEATURE"
 --   FeatureType        -- 地貌项时为 "FEATURE_FOREST"/"FEATURE_JUNGLE"
---   FilterKey          -- "BONUS"/"LUXURY"/"STRATEGIC"/"FEATURE"
+--   FilterKey          -- "BONUS"/"LUXURY"/"STRATEGIC"/"FEATURE"；非标准类别
+--                         （如秘密结社地脉）为 nil，只在“全部”标签下可见
 -- ===========================================================================
 include("InstanceManager");
 include("TabSupport");
@@ -70,20 +71,42 @@ local function EntryToFilterKey(entry:table)
     return ClassTypeToFilterKey(entry.ResourceClassType);
 end
 
+local BP_ICON_LOOKUP_SIZES:table = {38, 32, 50, 22, 64, 80, 256};
+local m_iconAtlasCache:table = {};   -- [iconId] = {X=, Y=, Sheet=} 或 false(整轮尺寸都没命中)
+
 local function TrySetIconFromId(iconControl:table, iconId:string)
     if iconControl == nil or iconId == nil or iconId == "" then
         return false;
     end
 
-    for _, iconSize in ipairs({38, 32, 50, 22, 64, 80, 256}) do
-        local textureOffsetX:number, textureOffsetY:number, textureSheet:string = IconManager:FindIconAtlas(iconId, iconSize);
-        if textureSheet ~= nil then
-            iconControl:SetTexture(textureOffsetX, textureOffsetY, textureSheet);
-            return true;
+    -- IconManager:FindIconAtlas 是引擎调用，未命中时还要逐尺寸试探。同一个图标在每次
+    -- 打开弹窗 / 切换筛选时都会被重新查询，这里按图标名缓存查询结果（false = 全部尺寸都没命中）。
+    -- 注意：这个 local 会依次承载 nil(未缓存) / table(命中) / false(整轮尺寸都没命中)，
+    -- 而 Civ6 的 Lua 会强制检查类型注解——写成 local cached:table 的话，
+    -- cached = false 会在加载时直接抛 "Attempting to set local variable of type
+    -- 'table' to type 'boolean'"，整个选择器文件加载失败，表现为点按钮毫无反应。
+    -- 所以这里必须用无注解的 local。
+    local cached = m_iconAtlasCache[iconId];
+    if cached == nil then
+        for _, iconSize in ipairs(BP_ICON_LOOKUP_SIZES) do
+            local textureOffsetX:number, textureOffsetY:number, textureSheet:string = IconManager:FindIconAtlas(iconId, iconSize);
+            if textureSheet ~= nil then
+                cached = { X = textureOffsetX, Y = textureOffsetY, Sheet = textureSheet };
+                break;
+            end
         end
+        if cached == nil then
+            cached = false;
+        end
+        m_iconAtlasCache[iconId] = cached;
     end
 
-    return false;
+    if cached == false then
+        return false;
+    end
+
+    iconControl:SetTexture(cached.X, cached.Y, cached.Sheet);
+    return true;
 end
 
 local function ResolveEntryIcon(iconControl:table, entry:table)
@@ -141,6 +164,15 @@ end
 local function Invalidate()
     Close();
     m_pendingEntries = {};
+end
+
+-- ===========================================================================
+-- 握手应答：入口在点击按钮时 Ping 一次，本 context 只要完成了 OnInit 就能 Pong。
+-- 入口据此把“选择器没起来”和“起来了但弹窗没显示”区分开——add-in context 没有
+-- 日志通道，静默失败否则完全不可观测。
+-- ===========================================================================
+local function BPRespondPing()
+    LuaEvents.BP_ResourceChooser_Pong();
 end
 
 -- ===========================================================================
@@ -244,11 +276,15 @@ end
 -- ===========================================================================
 -- 打开弹窗
 -- ===========================================================================
-local function Open(entries:table)
+local function BPOpenChooser(entries:table)
     if entries == nil or #entries == 0 then
         print("[BP_ResourcePlanter] BPResourceChooser open requested with no entries; ignoring.")
         return;
     end
+
+    -- 回执 1：入口据此判断“请求到底有没有到达选择器”。本 context 是 add-in，
+    -- 静默失败时既没有弹窗也没有日志，只能靠回执把故障点暴露到按钮提示上。
+    LuaEvents.BP_ResourceChooser_Received();
 
     -- 已经在队列里就不再重复入队,避免重复声音/动画。
     if UIManager:IsInPopupQueue(ContextPtr) then
@@ -264,13 +300,31 @@ local function Open(entries:table)
     -- (重)打开时回到"全部",避免沿用上一格的筛选(玩家很可能新格子已换类别)。
     m_currentFilter = FILTER_ALL;
     if m_kTabs ~= nil and m_kTabs.tabControls ~= nil and m_kTabs.tabControls[1] ~= nil then
+        -- SelectTab 会走标签回调里的 RefreshList,因此这里不能再补一次,否则每次打开
+        -- 都会把整张列表(含图标查询)连建两遍。
         m_kTabs.SelectTab(m_kTabs.tabControls[1]);
+    else
+        RefreshList();
     end
 
     Controls.ChooserTitle:SetText(Locale.ToUpper(Locale.Lookup("LOC_BP_RESOURCE_CHOOSER_TITLE")));
     Controls.ChooserPrompt:SetText(Locale.Lookup("LOC_BP_RESOURCE_CHOOSER_PROMPT"));
-    RefreshList();
     UI.PlaySound("UI_Screen_Open");
+
+    -- 回执 2：整段 Open 走完（入队 + 列表渲染都没有抛错）。
+    LuaEvents.BP_ResourceChooser_Opened();
+end
+
+-- ===========================================================================
+-- 打开入口的包装：add-in context 里一旦抛错，弹窗不会出现、日志也不一定留得下来。
+-- 这里把真实错误文本回传给 launcher，让它显示在按钮提示上。
+-- ===========================================================================
+local function Open(entries:table)
+    local ok, err = pcall(BPOpenChooser, entries);
+    if not ok then
+        print("[BP_ResourcePlanter] BPResourceChooser open failed: " .. tostring(err));
+        LuaEvents.BP_ResourceChooser_OpenFailed(tostring(err));
+    end
 end
 
 -- ===========================================================================
@@ -306,7 +360,7 @@ end
 -- ===========================================================================
 -- 初始化(由 SetInitHandler 在 context 就绪后触发)
 -- ===========================================================================
-local function OnInit()
+local function BPInitChooser()
     -- 此刻同名的 BPResourceChooser.xml 已与本 context 绑定,Controls.* 可用。
     m_resourceEntryIM = InstanceManager:new("ResourceEntryInstance", "Button", Controls.ChooserListStack);
     m_tabIM           = InstanceManager:new("TabInstance",       "Button", Controls.FilterTabContainer);
@@ -338,12 +392,26 @@ local function OnInit()
 
     LuaEvents.BP_ResourceChooser_Open.Add(Open);
     LuaEvents.BP_ResourceChooser_Invalidate.Add(Invalidate);
+    LuaEvents.BP_ResourceChooser_Ping.Add(BPRespondPing);
     print("[BP_ResourcePlanter] BPResourceChooser initialized (context " .. tostring(ContextPtr:GetID()) .. ").")
+end
+
+-- ===========================================================================
+-- 初始化包装：初始化中途抛错时，处理器不会被注册（表现为"点了没反应"）。
+-- 这里把真实错误文本回传，让 launcher 直接把它显示在按钮提示上。
+-- ===========================================================================
+local function OnInit()
+    local ok, err = pcall(BPInitChooser);
+    if not ok then
+        print("[BP_ResourcePlanter] BPResourceChooser init failed: " .. tostring(err));
+        LuaEvents.BP_ResourceChooser_InitFailed(tostring(err));
+    end
 end
 
 local function OnShutdown()
     LuaEvents.BP_ResourceChooser_Open.Remove(Open);
     LuaEvents.BP_ResourceChooser_Invalidate.Remove(Invalidate);
+    LuaEvents.BP_ResourceChooser_Ping.Remove(BPRespondPing);
     if m_resourceEntryIM ~= nil then
         m_resourceEntryIM:ResetInstances();
     end

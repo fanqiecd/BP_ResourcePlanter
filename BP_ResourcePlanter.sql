@@ -6,7 +6,7 @@
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
--- 第 1 步：收集所有可种植资源（加成 / 奢侈 / 战略）。
+-- 第 1 步：收集所有可种植资源（加成 / 奢侈 / 战略 / 秘密结社地脉）。
 --          这里不手工维护资源名单，而是完全由数据库驱动，这样只要 DLC 或其它
 --          模组的资源遵循标准 ResourceClassType 标签，就会被自动纳入。
 --          纯资源分类占位项（ARTIFACT / CITYSTATE / KNOWLEDGE）会被排除。
@@ -18,14 +18,24 @@
 --          详见 Resources.xml:207-212）地图上从不随机生成，引擎对它们的
 --          spawn/渲染路径未初始化，强行种植会让 SetResourceType 在客户端崩溃。
 --          所以“可种植资源”必须同时满足类属过滤 + 至少有一侧频率 > 0。
+--          秘密结社的地脉（RESOURCECLASS_LEY_LINE）不属于上面三类，但它同样由地图
+--          自然刷出（Frequency=10），所以单独放行；它被玩家看见与否取决于运行时授予
+--          的可见性，因此额外用 RequiresVisibility 标记把这件事交给 UI / Gameplay。
 -- ponytail: 核心数据固定在 LoadOrder=1000；兼容层会在更高顺序再次扫描，补登记
 --          与核心数据同顺序但晚执行的第三方资源。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS BPBuildableResources (
+-- 这是模组自己的缓存表；每次重建可同时迁移旧存档的表结构，避免
+-- CREATE TABLE IF NOT EXISTS 遗留旧版本缺少 RequiresVisibility 列。
+DROP TABLE IF EXISTS BPBuildableResources;
+CREATE TABLE BPBuildableResources (
     ResourceName   TEXT PRIMARY KEY,   -- 去掉 'RESOURCE_' 前缀后的资源类型名
     PrereqTech     TEXT,
     PrereqCivic    TEXT,
-    Domain         TEXT                  -- DOMAIN_LAND 或 DOMAIN_SEA
+    Domain         TEXT,                 -- DOMAIN_LAND 或 DOMAIN_SEA
+    -- 由“效果”而非科技 / 市政解锁的资源（目前的原版案例只有秘密结社地脉）：数据层
+    -- 没有 PrereqTech / PrereqCivic 可以判断玩家是否已经能看到它，只能把标记带到
+    -- 运行时，由 UI / Gameplay 查 PlayerResources:IsResourceVisible 再决定是否可种。
+    RequiresVisibility INTEGER NOT NULL DEFAULT 0
 );
 
 -- Domain 由资源允许出现的地形反推。
@@ -39,7 +49,7 @@ CREATE TABLE IF NOT EXISTS BPBuildableResources (
 -- 命名，查询也更稳。
 -- 只纳入标准的玩家可见资源类别，并且必须能被地图自然生成（任意一侧频率 > 0），
 -- 以排除垄断/独特奢侈（不会被地图刷出、引擎也未初始化其种植路径）。
-INSERT OR REPLACE INTO BPBuildableResources (ResourceName, PrereqTech, PrereqCivic, Domain)
+INSERT OR REPLACE INTO BPBuildableResources (ResourceName, PrereqTech, PrereqCivic, Domain, RequiresVisibility)
 SELECT
     REPLACE(R.ResourceType, 'RESOURCE_', ''),
     R.PrereqTech,
@@ -61,9 +71,21 @@ SELECT
         )
         THEN 'DOMAIN_LAND'
         ELSE 'DOMAIN_SEA'
-    END AS Domain
+    END AS Domain,
+    CASE
+        WHEN EXISTS (
+            SELECT 1 FROM Resource_Conditions RC
+            WHERE RC.ResourceType = R.ResourceType
+              AND RC.UnlocksFromEffect = 1
+        )
+        THEN 1
+        ELSE 0
+    END AS RequiresVisibility
 FROM Resources R
-WHERE R.ResourceClassType IN ('RESOURCECLASS_BONUS','RESOURCECLASS_LUXURY','RESOURCECLASS_STRATEGIC')
+-- RESOURCECLASS_LEY_LINE 是秘密结社模式的地脉。它和加成 / 奢侈 / 战略资源一样由
+-- 地图按 Frequency 自然刷出（AssignStartingPlots.lua 会主动把地脉并入奖励资源列表），
+-- 因此引擎的资源放置路径已经初始化，可以安全纳入 SetResourceType 种植流程。
+WHERE R.ResourceClassType IN ('RESOURCECLASS_BONUS','RESOURCECLASS_LUXURY','RESOURCECLASS_STRATEGIC','RESOURCECLASS_LEY_LINE')
   -- 关键过滤：只保留"地图会随机生成"的资源。Frequency = 陆地频率，
   -- SeaFrequency = 海洋频率，二者皆 0 表示不会被地图刷出（如 6 种垄断奢侈），
   -- 强行种植会触发引擎内 SetResourceType 的崩溃，必须排除。
@@ -181,9 +203,12 @@ DELETE FROM Improvement_ValidBuildUnits
 WHERE ImprovementType LIKE 'IMPROVEMENT_BP_%';
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
--- 第 5 步：注册可种植地貌（森林 / 雨林）。
+-- 第 5 步：注册可种植地貌（森林 / 雨林 / 沼泽 / 绿洲 / 礁石 /
+--          火山土 / 洪泛平原 / 地热裂缝）。
 --          它们不混入 BPBuildableResources，而是走一张独立表，避免把原版 Feature
---          伪装成 Resource。雨林在原版数据里对应 FEATURE_JUNGLE。
+--          伪装成 Resource。雨林在原版数据里对应 FEATURE_JUNGLE，地热裂缝对应
+--          FEATURE_GEOTHERMAL_FISSURE（随 Gathering Storm 提供：原版规则集下
+--          Features 表里没有这一行，下面的 SELECT 取不到数据，也不会报错）。
 --          地貌列表不再绑定任何科技 / 市政前置；只要格子合法，就允许直接种植。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS BPBuildableFeatures (
@@ -199,12 +224,41 @@ INSERT OR REPLACE INTO BPBuildableFeatures (FeatureType, Name, Icon, PrereqTech,
 SELECT
     F.FeatureType,
     F.Name,
-    'ICON_UNITOPERATION_PLANT_FOREST',
+    -- 地热裂缝在 Expansion2_Icons_Features.xml 里有官方图标，直接用比通用的“种植
+    -- 森林”动作图标更能说明种植目标；森林 / 雨林维持原有动作图标。图标表不在
+    -- Gameplay 数据库里、SQL 无法校验存在性，所以只对确定有图标的地貌做映射。
+    CASE F.FeatureType
+        WHEN 'FEATURE_MARSH' THEN 'ICON_FEATURE_MARSH'
+        WHEN 'FEATURE_OASIS' THEN 'ICON_FEATURE_OASIS'
+        WHEN 'FEATURE_REEF' THEN 'ICON_FEATURE_REEF'
+        WHEN 'FEATURE_VOLCANIC_SOIL' THEN 'ICON_FEATURE_VOLCANIC_SOIL'
+        WHEN 'FEATURE_FLOODPLAINS' THEN 'ICON_FEATURE_FLOODPLAINS'
+        WHEN 'FEATURE_FLOODPLAINS_GRASSLAND' THEN 'ICON_FEATURE_FLOODPLAINS_GRASSLAND'
+        WHEN 'FEATURE_FLOODPLAINS_PLAINS' THEN 'ICON_FEATURE_FLOODPLAINS_PLAINS'
+        WHEN 'FEATURE_FLOODPLAINS_DESERT' THEN 'ICON_FEATURE_FLOODPLAINS_DESERT'
+        WHEN 'FEATURE_GEOTHERMAL_FISSURE' THEN 'ICON_FEATURE_GEOTHERMAL_FISSURE'
+        ELSE 'ICON_UNITOPERATION_PLANT_FOREST'
+    END,
     NULL,
     NULL,
-    'DOMAIN_LAND'
+    CASE F.FeatureType
+        WHEN 'FEATURE_REEF' THEN 'DOMAIN_SEA'
+        ELSE 'DOMAIN_LAND'
+    END
 FROM Features F
-WHERE F.FeatureType IN ('FEATURE_FOREST', 'FEATURE_JUNGLE')
+WHERE F.FeatureType IN (
+    'FEATURE_FOREST',
+    'FEATURE_JUNGLE',
+    'FEATURE_MARSH',
+    'FEATURE_OASIS',
+    'FEATURE_REEF',
+    'FEATURE_VOLCANIC_SOIL',
+    'FEATURE_FLOODPLAINS',
+    'FEATURE_FLOODPLAINS_GRASSLAND',
+    'FEATURE_FLOODPLAINS_PLAINS',
+    'FEATURE_FLOODPLAINS_DESERT',
+    'FEATURE_GEOTHERMAL_FISSURE'
+)
   AND F.NaturalWonder = 0;
 
 INSERT OR REPLACE INTO Types (Type, Kind)

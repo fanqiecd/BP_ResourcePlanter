@@ -32,12 +32,15 @@ local bpImprovementToFeature = {}       -- [improvementIndex] = featureIndex
 local bpTrackedImprovementIndexes = {}  -- 快速判断“这个改良是不是本模组的”
 local bpConvertingPlots = {}            -- 以地块索引为键的防重入保护
 local bpBuildableResourceDomains = {}   -- [resourceIndex] = DOMAIN_LAND / DOMAIN_SEA
+local bpResourceRequiresVisibility = {} -- [resourceIndex] = true 表示种植前须查运行时可见性
 local bpBuildableFeatureDomains = {}    -- [featureIndex] = DOMAIN_LAND / DOMAIN_SEA
 local bpBuilderUnitTypes = {}            -- [UnitType] = true
 local BP_VISIBLE_RESOURCE_PROPERTY = 'BP_VisibleResourceForYieldBonuses'
 local BP_BONUS_RESOURCE_PROPERTY = 'BP_HasBonusResourceForYieldBonuses'
 local BP_LUXURY_RESOURCE_PROPERTY = 'BP_HasLuxuryResourceForYieldBonuses'
 local BP_STRATEGIC_RESOURCE_PROPERTY = 'BP_HasStrategicResourceForYieldBonuses'
+local BP_PLANTED_RESOURCE_PROPERTY = 'BP_PlantedResource'
+local BP_PLANTED_FEATURE_PROPERTY = 'BP_PlantedFeature'
 local BP_VANILLA_RESOURCE_RULES_CONFIG = 'BP_USE_VANILLA_RESOURCE_RULES'
 local function BPInitLookup()
     for row in GameInfo.TypeTags() do
@@ -50,13 +53,24 @@ local function BPInitLookup()
         local resourceInfo = GameInfo.Resources['RESOURCE_'..row.ResourceName]
         if resourceInfo ~= nil then
             bpBuildableResourceDomains[resourceInfo.Index] = row.Domain
+            bpResourceRequiresVisibility[resourceInfo.Index] =
+                row.RequiresVisibility == 1 or row.RequiresVisibility == true
         end
     end
 
+    -- 可种植地貌完全由 BPBuildableFeatures 驱动（森林 / 雨林 / 地热裂缝…），
+    -- 这里不再逐个点名，新地貌只要在 SQL 里登记，占位改良映射就会自动跟上。
     for row in GameInfo.BPBuildableFeatures() do
         local featureInfo = GameInfo.Features[row.FeatureType]
         if featureInfo ~= nil then
             bpBuildableFeatureDomains[featureInfo.Index] = row.Domain
+
+            local improvementInfo = GameInfo.Improvements['IMPROVEMENT_BP_'..row.FeatureType]
+            if improvementInfo then
+                local improvementIndex = improvementInfo.Index
+                bpImprovementToFeature[improvementIndex] = featureInfo.Index
+                bpTrackedImprovementIndexes[improvementIndex] = true
+            end
         end
     end
 
@@ -76,19 +90,8 @@ local function BPInitLookup()
         end
     end
 
-    for featureInfo in GameInfo.Features() do
-        local featureType = featureInfo.FeatureType
-        if featureType == 'FEATURE_FOREST' or featureType == 'FEATURE_JUNGLE' then
-            local improvementType = 'IMPROVEMENT_BP_'..featureType
-            local improvementInfo = GameInfo.Improvements[improvementType]
-            if improvementInfo then
-                local improvementIndex = improvementInfo.Index
-                local featureIndex = featureInfo.Index
-                bpImprovementToFeature[improvementIndex] = featureIndex
-                bpTrackedImprovementIndexes[improvementIndex] = true
-            end
-        end
-    end
+    -- 地貌侧的占位改良映射已经随 BPBuildableFeatures 一并填好，这里不再像旧版那样
+    -- 遍历 Features 并硬编码 FEATURE_FOREST / FEATURE_JUNGLE。
 
     local resourceCount = 0
     local featureCount = 0
@@ -221,6 +224,27 @@ local function BPSyncResourceYieldProperties(plot, resourceIndexOverride)
     plot:SetProperty(BP_STRATEGIC_RESOURCE_PROPERTY, strategicProperty)
 end
 
+-- ResourceBuilder.SetResourceType 只负责改资源本身，不会留下“这是本模组种的”
+-- 的记录。保留一个地块属性，方便清除动作识别种植资源，也让后续版本能区分
+-- 普通资源和本模组新增的资源。
+local function BPSetPlantedResourceMarker(plot, planted)
+    if plot == nil then
+        return
+    end
+    if planted then
+        plot:SetProperty(BP_PLANTED_RESOURCE_PROPERTY, 1)
+    else
+        plot:SetProperty(BP_PLANTED_RESOURCE_PROPERTY, nil)
+    end
+end
+
+local function BPSetPlantedFeatureMarker(plot, planted)
+    if plot == nil then
+        return
+    end
+    plot:SetProperty(BP_PLANTED_FEATURE_PROPERTY, planted and 1 or nil)
+end
+
 local function BPIsCommonPlotValid(plot, player)
     if plot == nil then return false end
 
@@ -322,18 +346,37 @@ local function BPPlaceResource(plot, resourceIndex)
     ResourceBuilder.SetResourceType(plot, resourceIndex, 1)
     if plot:GetResourceType() ~= resourceIndex then
         BPSyncResourceYieldProperties(plot)
+        BPSetPlantedResourceMarker(plot, false)
         BPClearImprovement(plot)
         return false
     end
     BPSyncResourceYieldProperties(plot)
+    BPSetPlantedResourceMarker(plot, true)
     BPClearImprovement(plot)
     return true
+end
+
+-- 清除资源必须走 ResourceBuilder，而不是只清改良。资源种植后地块上没有占位改良，
+-- 所以原版建造者列表不会自动给出可用的移除按钮；独立入口由这里完成真正的删除。
+local function BPRemoveResource(plot)
+    if plot == nil or plot:GetResourceType() == -1 then
+        return false
+    end
+
+    ResourceBuilder.SetResourceType(plot, -1, 0)
+    local removed = plot:GetResourceType() == -1
+    if removed then
+        BPSetPlantedResourceMarker(plot, false)
+        BPSyncResourceYieldProperties(plot)
+    end
+    return removed
 end
 
 local function BPPlaceFeature(plot, featureIndex)
     BPClearImprovement(plot)
     TerrainBuilder.SetFeatureType(plot, featureIndex)
     BPSyncResourceYieldProperties(plot)
+    BPSetPlantedFeatureMarker(plot, plot:GetFeatureType() == featureIndex)
     BPClearImprovement(plot)
     return plot:GetFeatureType() == featureIndex
 end
@@ -519,6 +562,23 @@ local function BPHasPlayerUnlockedResource(resourceInfo, player)
     return true
 end
 
+-- 效果解锁资源（原版只有秘密结社地脉）没有科技 / 市政前置，玩家能不能看到它取决于
+-- 运行时授予的可见性（GOVERNOR_PROMOTION_HERMETIC_ORDER_1 的
+-- MODIFIER_PLAYER_GRANT_FREE_RESOURCE_VISIBILITY）。看不见就不该种，否则会在自家
+-- 领地上留下一格完全不可见的资源。
+local function BPIsResourceAvailableToPlayer(resourceInfo, player, requiresVisibility)
+    if not BPHasPlayerUnlockedResource(resourceInfo, player) then
+        return false
+    end
+
+    if not requiresVisibility then
+        return true
+    end
+
+    local playerResources = player:GetResources()
+    return playerResources ~= nil and playerResources:IsResourceVisible(resourceInfo.Hash)
+end
+
 local function BPFindAvailableChargeAbility(unit)
     local unitAbility = unit and unit:GetAbility() or nil
     if unitAbility == nil then
@@ -582,7 +642,7 @@ local function BPExecutePlantTarget(playerID, params)
         local domain = bpBuildableResourceDomains[targetIndex]
         if resourceInfo ~= nil
             and domain ~= nil
-            and BPHasPlayerUnlockedResource(resourceInfo, player)
+            and BPIsResourceAvailableToPlayer(resourceInfo, player, bpResourceRequiresVisibility[targetIndex])
             and BPDomainMatchesPlot(domain, plot)
             and BPIsValidResourcePlot(plot, playerID, resourceInfo) then
             planted = BPPlaceResource(plot, targetIndex)
@@ -619,6 +679,87 @@ local function BPExecutePlantTarget(playerID, params)
         tostring(chargeAbility),
         BPDescribePlotForDebug(plot)
     ))
+end
+
+local function BPExecuteRemoveResource(playerID, params)
+    local player = Players[playerID]
+    local unit = params and UnitManager.GetUnit(playerID, params.UnitID) or nil
+    local plot = params and Map.GetPlot(params.X, params.Y) or nil
+    if player == nil or not player:IsHuman() or unit == nil or plot == nil then
+        print('[BP_ResourcePlanter] Resource removal canceled: invalid player, unit, or plot.')
+        return
+    end
+
+    local unitInfo = GameInfo.Units[unit:GetType()]
+    if unitInfo == nil
+        or not bpBuilderUnitTypes[unitInfo.UnitType]
+        or unit:GetX() ~= params.X
+        or unit:GetY() ~= params.Y
+        or unit:GetBuildCharges() <= 0
+        or unit:GetMovesRemaining() <= 0 then
+        print('[BP_ResourcePlanter] Resource removal canceled: invalid builder state.')
+        return
+    end
+
+    local owner = plot:GetOwner()
+    if (owner ~= -1 and owner ~= playerID)
+        or plot:GetDistrictType() ~= -1
+        or plot:GetImprovementType() ~= -1
+        or plot:GetResourceType() == -1
+        or plot:GetProperty(BP_PLANTED_RESOURCE_PROPERTY) ~= 1 then
+        print('[BP_ResourcePlanter] Resource removal canceled: plot is not removable.')
+        return
+    end
+
+    local chargeAbility = BPFindAvailableChargeAbility(unit)
+    if chargeAbility == nil then
+        print('[BP_ResourcePlanter] Resource removal canceled: consumed-charge ability slots exhausted.')
+        return
+    end
+
+    if not BPRemoveResource(plot) then
+        print('[BP_ResourcePlanter] Resource removal failed.')
+        return
+    end
+
+    BPConsumeBuilderCharge(unit, chargeAbility)
+    print(string.format(
+        '[BP_ResourcePlanter] Resource removed player=%d %s.',
+        playerID,
+        BPDescribePlotForDebug(plot)
+    ))
+end
+
+local function BPExecuteRemoveFeature(playerID, params)
+    local player = Players[playerID]
+    local unit = params and UnitManager.GetUnit(playerID, params.UnitID) or nil
+    local plot = params and Map.GetPlot(params.X, params.Y) or nil
+    if player == nil or not player:IsHuman() or unit == nil or plot == nil then
+        return
+    end
+
+    local unitInfo = GameInfo.Units[unit:GetType()]
+    if unitInfo == nil or not bpBuilderUnitTypes[unitInfo.UnitType]
+        or unit:GetX() ~= params.X or unit:GetY() ~= params.Y
+        or unit:GetBuildCharges() <= 0 or unit:GetMovesRemaining() <= 0
+        or plot:GetOwner() ~= -1 and plot:GetOwner() ~= playerID
+        or plot:GetDistrictType() ~= -1 or plot:GetImprovementType() ~= -1
+        or plot:GetFeatureType() == -1
+        or plot:GetProperty(BP_PLANTED_FEATURE_PROPERTY) ~= 1 then
+        return
+    end
+
+    local chargeAbility = BPFindAvailableChargeAbility(unit)
+    if chargeAbility == nil then
+        return
+    end
+
+    TerrainBuilder.SetFeatureType(plot, -1)
+    if plot:GetFeatureType() == -1 then
+        BPSetPlantedFeatureMarker(plot, false)
+        BPSyncResourceYieldProperties(plot)
+        BPConsumeBuilderCharge(unit, chargeAbility)
+    end
 end
 
 local function BPSyncAllVisibleResourceYieldProperties()
@@ -679,6 +820,8 @@ local function BPInitialize()
     BPSyncAllVisibleResourceYieldProperties()
     Events.ImprovementAddedToMap.Add(BPOnImprovementAddedToMap)
     GameEvents.BPPlantTarget.Add(BPExecutePlantTarget)
+    GameEvents.BPRemoveResource.Add(BPExecuteRemoveResource)
+    GameEvents.BPRemoveFeature.Add(BPExecuteRemoveFeature)
     print('[BP_ResourcePlanter] Initialized with independent planting and legacy dummy cleanup.')
 end
 

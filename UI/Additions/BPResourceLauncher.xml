@@ -4,7 +4,7 @@
     <Grid
       ID="LauncherGrid"
       Anchor="R,B"
-      Offset="501,0"
+      Offset="0,0"
       Size="46,41"
       AutoSizePadding="6,0"
       Texture="SelectionPanel_ActionGroupSlot"
@@ -20,6 +20,30 @@
         Texture="UnitPanel_ActionButton">
         <Image
           ID="LauncherIcon"
+          Anchor="C,C"
+          Offset="0,-2"
+          Size="38,38"/>
+      </Button>
+    </Grid>
+    <Grid
+      ID="RemovalGrid"
+      Anchor="R,B"
+      Offset="0,0"
+      Size="46,41"
+      AutoSizePadding="6,0"
+      Texture="SelectionPanel_ActionGroupSlot"
+      SliceCorner="5,19"
+      SliceSize="1,1"
+      SliceTextureSize="12,41"
+      ConsumeMouse="1"
+      Hidden="1">
+      <Button
+        ID="RemovalButton"
+        Anchor="C,B"
+        Size="44,53"
+        Texture="UnitPanel_ActionButton">
+        <Image
+          ID="RemovalIcon"
           Anchor="C,C"
           Offset="0,-2"
           Size="38,38"/>
