@@ -98,6 +98,7 @@ local function BPBuildDataCache()
             table.insert(m_resourceDefinitions, {
                 Info = resourceInfo,
                 Domain = row.Domain,
+                CanPlantOnWater = row.CanPlantOnWater == 1 or row.CanPlantOnWater == true,
                 Icon = "ICON_" .. resourceInfo.ResourceType,
                 FilterKey = filterKey,
                 RequiresVisibility = row.RequiresVisibility,
@@ -198,11 +199,12 @@ local function BPIsCommonPlotValid(plot:table, playerID:number)
     return plotOwner == -1 or plotOwner == playerID;
 end
 
-local function BPDomainMatchesPlot(domain:string, plot:table)
-    if domain == "DOMAIN_SEA" then
-        return plot:IsWater();
+local function BPDomainMatchesPlot(domain:string, plot:table, canPlantOnWater:boolean)
+    if plot:IsWater() then
+        -- 可陆可海资源（原版石油 / 琥珀）的 Domain 记的是陆地，水域要靠这一位补上。
+        return domain == "DOMAIN_SEA" or canPlantOnWater == true;
     end
-    return domain == "DOMAIN_LAND" and not plot:IsWater();
+    return domain == "DOMAIN_LAND";
 end
 
 local function BPResourceMatchesVanillaRules(resourceType:string, plot:table)
@@ -324,7 +326,7 @@ local function BPCollectPlantableEntries(pUnit:table)
     if plot:GetResourceType() == -1 then
         for _, definition in ipairs(m_resourceDefinitions) do
             local resourceInfo:table = definition.Info;
-            if BPDomainMatchesPlot(definition.Domain, plot)
+            if BPDomainMatchesPlot(definition.Domain, plot, definition.CanPlantOnWater)
                 and BPResourceMatchesVanillaRules(resourceInfo.ResourceType, plot)
                 and BPIsResourceAvailableToPlayer(resourceInfo, player, definition.RequiresVisibility) then
                 table.insert(entries, BPCreateEntry("RESOURCE", definition));

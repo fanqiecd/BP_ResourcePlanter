@@ -31,7 +31,11 @@ CREATE TABLE BPBuildableResources (
     ResourceName   TEXT PRIMARY KEY,   -- 去掉 'RESOURCE_' 前缀后的资源类型名
     PrereqTech     TEXT,
     PrereqCivic    TEXT,
-    Domain         TEXT,                 -- DOMAIN_LAND 或 DOMAIN_SEA
+    Domain         TEXT,                 -- DOMAIN_LAND 或 DOMAIN_SEA（双域资源取陆地）
+    -- 资源可以同时有陆地落点和水域落点（原版石油、R&F 的琥珀：陆地 + 海岸 / 湖泊）。
+    -- Domain 一列塞不下两种，只能记主域给占位改良用；某类格子到底能不能种
+    -- 由这一位决定，否则这类资源在水域上会被判成不合法。
+    CanPlantOnWater INTEGER NOT NULL DEFAULT 0,
     -- 由“效果”而非科技 / 市政解锁的资源（目前的原版案例只有秘密结社地脉）：数据层
     -- 没有 PrereqTech / PrereqCivic 可以判断玩家是否已经能看到它，只能把标记带到
     -- 运行时，由 UI / Gameplay 查 PlayerResources:IsResourceVisible 再决定是否可种。
@@ -41,7 +45,7 @@ CREATE TABLE BPBuildableResources (
 -- Domain 由资源允许出现的地形反推。
 -- 只要某资源的任一合法地形是陆地，就归为 DOMAIN_LAND（这样像石油这种可陆可海
 -- 的资源仍会归到更常见的陆地种植场景）；否则归为 DOMAIN_SEA（纯海洋资源，例如
--- 鲸鱼或珍珠）。
+-- 鲸鱼或珍珠）。可陆可海资源的另一半用 CanPlantOnWater 单独记下。
 -- 对于香蕉、可可豆、丝绸这类“只声明合法地貌、不声明合法地形”的资源，还要继续
 -- 看 Resource_ValidFeatures 对应的 Feature_ValidTerrains：只要这些地貌能落在任一
 -- 非海洋地形上，也应判为 DOMAIN_LAND，而不是误回退成海洋资源。
@@ -49,7 +53,7 @@ CREATE TABLE BPBuildableResources (
 -- 命名，查询也更稳。
 -- 只纳入标准的玩家可见资源类别，并且必须能被地图自然生成（任意一侧频率 > 0），
 -- 以排除垄断/独特奢侈（不会被地图刷出、引擎也未初始化其种植路径）。
-INSERT OR REPLACE INTO BPBuildableResources (ResourceName, PrereqTech, PrereqCivic, Domain, RequiresVisibility)
+INSERT OR REPLACE INTO BPBuildableResources (ResourceName, PrereqTech, PrereqCivic, Domain, CanPlantOnWater, RequiresVisibility)
 SELECT
     REPLACE(R.ResourceType, 'RESOURCE_', ''),
     R.PrereqTech,
@@ -72,6 +76,27 @@ SELECT
         THEN 'DOMAIN_LAND'
         ELSE 'DOMAIN_SEA'
     END AS Domain,
+    -- 水域落点：判定方式与 Domain 完全对称，只是换到 COAST / OCEAN 一侧。
+    -- 湖泊在 Civ6 里就是 TERRAIN_COAST 地块（引擎没有 TERRAIN_LAKE），所以
+    -- 有 COAST 落点的资源天然也能种在湖上。
+    CASE
+        WHEN EXISTS (
+            SELECT 1 FROM Resource_ValidTerrains VT
+            WHERE VT.ResourceType = R.ResourceType
+              AND VT.TerrainType IN ('TERRAIN_COAST','TERRAIN_OCEAN')
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM Resource_ValidFeatures RVF
+            JOIN Feature_ValidTerrains FVT ON FVT.FeatureType = RVF.FeatureType
+            JOIN Features F ON F.FeatureType = RVF.FeatureType
+            WHERE RVF.ResourceType = R.ResourceType
+              AND F.NaturalWonder = 0
+              AND FVT.TerrainType IN ('TERRAIN_COAST','TERRAIN_OCEAN')
+        )
+        THEN 1
+        ELSE 0
+    END AS CanPlantOnWater,
     CASE
         WHEN EXISTS (
             SELECT 1 FROM Resource_Conditions RC

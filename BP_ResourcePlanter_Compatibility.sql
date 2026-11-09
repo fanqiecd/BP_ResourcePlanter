@@ -23,7 +23,7 @@
 --          后一个条件与核心 SQL 保持一致，避免把不会由地图初始化的垄断资源
 --          送进 ResourceBuilder.SetResourceType。
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-INSERT OR REPLACE INTO BPBuildableResources (ResourceName, PrereqTech, PrereqCivic, Domain, RequiresVisibility)
+INSERT OR REPLACE INTO BPBuildableResources (ResourceName, PrereqTech, PrereqCivic, Domain, CanPlantOnWater, RequiresVisibility)
 SELECT
     REPLACE(R.ResourceType, 'RESOURCE_', ''),
     R.PrereqTech,
@@ -46,6 +46,26 @@ SELECT
         THEN 'DOMAIN_LAND'
         ELSE 'DOMAIN_SEA'
     END AS Domain,
+    -- 与核心数据同一条规则：可陆可海资源（石油 / 琥珀）在水域侧单独记一位，
+    -- 否则这里重写整行会把核心 SQL 算出的水域落点冲成 0。
+    CASE
+        WHEN EXISTS (
+            SELECT 1 FROM Resource_ValidTerrains VT
+            WHERE VT.ResourceType = R.ResourceType
+              AND VT.TerrainType IN ('TERRAIN_COAST','TERRAIN_OCEAN')
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM Resource_ValidFeatures RVF
+            JOIN Feature_ValidTerrains FVT ON FVT.FeatureType = RVF.FeatureType
+            JOIN Features F ON F.FeatureType = RVF.FeatureType
+            WHERE RVF.ResourceType = R.ResourceType
+              AND F.NaturalWonder = 0
+              AND FVT.TerrainType IN ('TERRAIN_COAST','TERRAIN_OCEAN')
+        )
+        THEN 1
+        ELSE 0
+    END AS CanPlantOnWater,
     -- 与核心数据保持同一条规则：Resource_Conditions 标记为“由效果解锁”的资源
     -- （原版即地脉）没有科技 / 市政前置可查，必须交由运行时做可见性校验。
     CASE

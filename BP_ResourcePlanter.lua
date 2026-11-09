@@ -32,6 +32,7 @@ local bpImprovementToFeature = {}       -- [improvementIndex] = featureIndex
 local bpTrackedImprovementIndexes = {}  -- 快速判断“这个改良是不是本模组的”
 local bpConvertingPlots = {}            -- 以地块索引为键的防重入保护
 local bpBuildableResourceDomains = {}   -- [resourceIndex] = DOMAIN_LAND / DOMAIN_SEA
+local bpResourceCanPlantOnWater = {}    -- [resourceIndex] = true 表示该资源也能落在水域
 local bpResourceRequiresVisibility = {} -- [resourceIndex] = true 表示种植前须查运行时可见性
 local bpBuildableFeatureDomains = {}    -- [featureIndex] = DOMAIN_LAND / DOMAIN_SEA
 local bpBuilderUnitTypes = {}            -- [UnitType] = true
@@ -53,8 +54,17 @@ local function BPInitLookup()
         local resourceInfo = GameInfo.Resources['RESOURCE_'..row.ResourceName]
         if resourceInfo ~= nil then
             bpBuildableResourceDomains[resourceInfo.Index] = row.Domain
+            bpResourceCanPlantOnWater[resourceInfo.Index] =
+                row.CanPlantOnWater == 1 or row.CanPlantOnWater == true
             bpResourceRequiresVisibility[resourceInfo.Index] =
                 row.RequiresVisibility == 1 or row.RequiresVisibility == true
+        end
+    end
+
+    -- 自检：纯水域资源必须带水域标记，否则它在任何格子上都种不了（说明 SQL 的推导漏了）。
+    for resourceIndex, domain in pairs(bpBuildableResourceDomains) do
+        if domain == 'DOMAIN_SEA' and not bpResourceCanPlantOnWater[resourceIndex] then
+            print('[BP_ResourcePlanter] WARNING: sea-domain resource '..tostring(resourceIndex)..' has no water capability.')
         end
     end
 
@@ -521,11 +531,12 @@ local function BPOnImprovementAddedToMap(x, y, improvementIndex, playerID)
     end
 end
 
-local function BPDomainMatchesPlot(domain, plot)
-    if domain == 'DOMAIN_SEA' then
-        return plot:IsWater()
+local function BPDomainMatchesPlot(domain, plot, canPlantOnWater)
+    if plot:IsWater() then
+        -- 可陆可海资源（原版石油 / 琥珀）的 Domain 记的是陆地，水域要靠这一位补上。
+        return domain == 'DOMAIN_SEA' or canPlantOnWater == true
     end
-    return domain == 'DOMAIN_LAND' and not plot:IsWater()
+    return domain == 'DOMAIN_LAND'
 end
 
 local function BPFeatureMatchesTerrain(featureInfo, plot)
@@ -643,7 +654,7 @@ local function BPExecutePlantTarget(playerID, params)
         if resourceInfo ~= nil
             and domain ~= nil
             and BPIsResourceAvailableToPlayer(resourceInfo, player, bpResourceRequiresVisibility[targetIndex])
-            and BPDomainMatchesPlot(domain, plot)
+            and BPDomainMatchesPlot(domain, plot, bpResourceCanPlantOnWater[targetIndex])
             and BPIsValidResourcePlot(plot, playerID, resourceInfo) then
             planted = BPPlaceResource(plot, targetIndex)
         end
